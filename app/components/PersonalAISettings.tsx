@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { clearPersonalAgentConfig, readPersonalAgentConfig, savePersonalAgentConfig } from "../lib/personalAgentConfig";
 
-export default function PersonalAISettings() {
+export default function PersonalAISettings({ trigger = "button" }: { trigger?: "button" | "menu" }) {
   const [open, setOpen] = useState(false);
   const [apiBase, setApiBase] = useState("");
   const [model, setModel] = useState("");
@@ -25,7 +25,7 @@ export default function PersonalAISettings() {
   };
   const clear = () => { clearPersonalAgentConfig(); setApiBase(""); setModel(""); setApiKey(""); setNotice("已清除本机个人配置"); };
   return <>
-    <button className="personal-ai-trigger" type="button" onClick={() => setOpen(true)}>个人 AI 配置</button>
+    <button className={trigger === "menu" ? "personal-ai-menu-trigger" : "personal-ai-trigger"} type="button" aria-label="个人 AI 配置" onClick={() => setOpen(true)}>{trigger === "menu" ? "•••" : "个人 AI 配置"}</button>
     {open && <div className="personal-ai-layer" role="dialog" aria-modal="true" aria-labelledby="personal-ai-title"><div className="personal-ai-panel">
       <div className="personal-ai-heading"><div><small>PERSONAL AI</small><h2 id="personal-ai-title">个人 AI 配置</h2><p>仅保存在当前浏览器；生成策略时临时使用，不写入团队数据库。</p></div><button type="button" aria-label="关闭" onClick={() => setOpen(false)}>×</button></div>
       <label>模型接口地址<input value={apiBase} onChange={(event) => setApiBase(event.target.value)} placeholder="https://api.example.com/v1" autoComplete="url" /></label>

@@ -74,16 +74,17 @@ test("strategy generation uses selected evidence and persists traceable results"
 });
 
 test("personal AI settings remain in the current browser and travel only with strategy requests", async () => {
-  const [settings, config, topbar] = await Promise.all([
+  const [settings, config, sidebar] = await Promise.all([
     readFile(new URL("app/components/PersonalAISettings.tsx", root), "utf8"),
     readFile(new URL("app/lib/personalAgentConfig.ts", root), "utf8"),
-    readFile(new URL("app/components/ProjectTopbar.tsx", root), "utf8"),
+    readFile(new URL("app/components/DashboardSidebar.tsx", root), "utf8"),
   ]);
   assert.match(settings, /仅保存在当前浏览器/);
   assert.match(settings, /type="password"/);
   assert.match(config, /localStorage/);
   assert.match(config, /x-design-lab-agent-api-key/);
-  assert.match(topbar, /PersonalAISettings/);
+  assert.match(sidebar, /PersonalAISettings trigger="menu"/);
+  assert.match(sidebar, /api\/account/);
 });
 
 test("returning to requirements preserves completed research until an explicit rerun", async () => {

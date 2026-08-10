@@ -1,15 +1,26 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import PersonalAISettings from "./PersonalAISettings";
+
 type DashboardSidebarProps = {
   active?: "home" | "projects" | "tasks" | "favorites" | "cases" | "feedback" | "strategy" | "standards";
 };
 
 export default function DashboardSidebar({ active }: DashboardSidebarProps) {
+  const [displayName, setDisplayName] = useState("当前使用者");
   const go = (path: string) => { window.location.href = path; };
   const createNewProject = () => {
     window.localStorage.removeItem("design-lab-project-draft");
     window.location.href = `/projects/new?fresh=${Date.now()}`;
   };
+
+  useEffect(() => {
+    fetch("/api/account", { cache: "no-store" })
+      .then(async (response) => response.ok ? response.json() : null)
+      .then((data) => { if (data?.displayName) setDisplayName(data.displayName); })
+      .catch(() => undefined);
+  }, []);
 
   return (
     <aside className="sidebar">
@@ -34,7 +45,7 @@ export default function DashboardSidebar({ active }: DashboardSidebarProps) {
       </div>
       <div className="sidebar-footer">
         <button className="nav-item" type="button"><span>?</span>使用说明</button>
-        <div className="profile"><span className="avatar">设</span><div><strong>设计团队</strong><span>内部工作空间</span></div><button type="button" aria-label="账户菜单">•••</button></div>
+        <div className="profile"><span className="avatar">{displayName.slice(0, 1)}</span><div><strong>{displayName}</strong><span>当前使用者</span></div><PersonalAISettings trigger="menu" /></div>
       </div>
     </aside>
   );
