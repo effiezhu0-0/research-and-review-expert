@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { clearPersonalAgentConfig, readPersonalAgentConfig, savePersonalAgentConfig } from "../lib/personalAgentConfig";
 import { personalIdentityHeaders } from "../lib/personalIdentity";
 
@@ -40,7 +41,7 @@ export default function PersonalAISettings({ trigger = "button" }: { trigger?: "
   };
   return <>
     <button className={trigger === "menu" ? "personal-ai-menu-trigger" : "personal-ai-trigger"} type="button" aria-label="个人 AI 配置" onClick={() => setOpen(true)}>{trigger === "menu" ? "•••" : "个人 AI 配置"}</button>
-    {open && <div className="personal-ai-layer" role="dialog" aria-modal="true" aria-labelledby="personal-ai-title"><div className="personal-ai-panel">
+    {open && typeof document !== "undefined" && createPortal(<div className="personal-ai-layer" role="dialog" aria-modal="true" aria-labelledby="personal-ai-title"><div className="personal-ai-panel">
       <button className="personal-ai-close" type="button" aria-label="关闭" onClick={() => setOpen(false)}>×</button>
       <div className="personal-ai-heading"><div><small>PERSONAL AI</small><h2 id="personal-ai-title">个人 AI 配置</h2><p>仅保存在当前浏览器；生成策略时临时使用，不写入团队数据库。</p></div></div>
       <label><span>AI 服务地址<small>从你购买或申请 API 的服务商文档中复制。</small></span><input value={apiBase} onChange={(event) => setApiBase(event.target.value)} placeholder="例如 https://api.openai.com/v1" autoComplete="url" /></label>
@@ -49,6 +50,6 @@ export default function PersonalAISettings({ trigger = "button" }: { trigger?: "
       <p className="personal-ai-note">仅支持兼容 OpenAI Chat Completions 的 HTTPS 接口。你的 Key 不会被保存到项目或服务器。</p>{notice && <p className="personal-ai-notice">{notice}</p>}
       <section className="worker-pairing"><div><strong>本机研究 Worker</strong><p>让你电脑上已登录小红书的 Worker 只处理你创建的任务。</p></div><button type="button" onClick={() => { void createWorkerPair(); }}>生成本机配对信息</button>{workerConfig && <><pre>{workerConfig}</pre><button type="button" onClick={() => { void copyWorkerPair(); }}>复制配对信息</button></>}</section>
       <footer><button type="button" onClick={clear}>清除本机配置</button><button className="personal-ai-save" type="button" onClick={save}>保存配置</button></footer>
-    </div></div>}
+    </div></div>, document.body)}
   </>;
 }
