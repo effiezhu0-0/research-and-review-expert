@@ -83,6 +83,7 @@ test("personal AI settings remain in the current browser and travel only with st
   assert.match(settings, /从你购买或申请 API 的服务商文档中复制/);
   assert.match(settings, /personal-ai-close/);
   assert.match(settings, /生成本机配对信息/);
+  assert.match(settings, /登录状态已失效/);
   assert.match(settings, /type="password"/);
   assert.match(config, /localStorage/);
   assert.match(config, /x-design-lab-agent-api-key/);

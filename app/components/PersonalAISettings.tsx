@@ -29,7 +29,7 @@ export default function PersonalAISettings({ trigger = "button" }: { trigger?: "
   const createWorkerPair = async () => {
     const response = await fetch("/api/workers/pair", { method: "POST", headers: personalIdentityHeaders() }).catch(() => null);
     const data = await response?.json().catch(() => null);
-    if (!response?.ok) { setNotice(data?.error || "生成 Worker 配对信息失败"); return; }
+    if (!response?.ok) { setNotice(data?.error || (response?.status === 401 ? "登录状态已失效，请刷新页面后重新登录" : "生成 Worker 配对信息失败")); return; }
     setWorkerConfig(`DASHBOARD_URL=${window.location.origin}\nWORKER_OWNER_ID=${data.ownerId}\nWORKER_PAIR_TOKEN=${data.pairToken}`);
     setNotice("已生成，仅用于你的本机 Worker");
   };
