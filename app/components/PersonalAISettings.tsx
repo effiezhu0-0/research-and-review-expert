@@ -28,9 +28,21 @@ export default function PersonalAISettings({ trigger = "button" }: { trigger?: "
   };
   const clear = () => { clearPersonalAgentConfig(); setApiBase(""); setModel(""); setApiKey(""); setNotice("已清除本机个人配置"); };
   const createWorkerPair = async () => {
-    const response = await fetch("/api/workers/pair", { method: "POST", headers: personalIdentityHeaders() }).catch(() => null);
+    setNotice("正在生成本机配对信息…");
+    let response: Response | null = null;
+    try {
+      response = await fetch("/api/workers/pair", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "content-type": "application/json", ...personalIdentityHeaders() },
+        body: "{}",
+      });
+    } catch (error) {
+      setNotice(`无法连接配对服务：${error instanceof Error ? error.message : "请检查网络后重试"}`);
+      return;
+    }
     const data = await response?.json().catch(() => null);
-    if (!response?.ok) { setNotice(data?.error || (response?.status === 401 ? "登录状态已失效，请刷新页面后重新登录" : "生成 Worker 配对信息失败")); return; }
+    if (!response.ok) { setNotice(data?.error || (response.status === 401 ? "登录状态已失效，请刷新页面后重新登录" : `生成本机配对信息失败（服务返回 ${response.status}）`)); return; }
     setWorkerConfig(`DASHBOARD_URL=${window.location.origin}\nWORKER_OWNER_ID=${data.ownerId}\nWORKER_PAIR_TOKEN=${data.pairToken}`);
     setNotice("已生成，仅用于你的本机 Worker");
   };
