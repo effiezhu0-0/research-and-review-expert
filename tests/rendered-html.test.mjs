@@ -80,6 +80,8 @@ test("personal AI settings remain in the current browser and travel only with st
     readFile(new URL("app/components/DashboardSidebar.tsx", root), "utf8"),
   ]);
   assert.match(settings, /仅保存在当前浏览器/);
+  assert.match(settings, /从你购买或申请 API 的服务商文档中复制/);
+  assert.match(settings, /personal-ai-close/);
   assert.match(settings, /type="password"/);
   assert.match(config, /localStorage/);
   assert.match(config, /x-design-lab-agent-api-key/);
