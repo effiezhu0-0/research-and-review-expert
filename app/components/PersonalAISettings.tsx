@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { clearPersonalAgentConfig, readPersonalAgentConfig, savePersonalAgentConfig } from "../lib/personalAgentConfig";
+import { personalIdentityHeaders } from "../lib/personalIdentity";
 
 export default function PersonalAISettings({ trigger = "button" }: { trigger?: "button" | "menu" }) {
   const [open, setOpen] = useState(false);
@@ -9,6 +10,7 @@ export default function PersonalAISettings({ trigger = "button" }: { trigger?: "
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [notice, setNotice] = useState("");
+  const [workerConfig, setWorkerConfig] = useState("");
   useEffect(() => {
     const config = readPersonalAgentConfig();
     if (config) queueMicrotask(() => { setApiBase(config.apiBase); setModel(config.model); setApiKey(config.apiKey); });
@@ -24,6 +26,18 @@ export default function PersonalAISettings({ trigger = "button" }: { trigger?: "
     } catch (error) { setNotice(error instanceof Error ? error.message : "配置格式不正确"); }
   };
   const clear = () => { clearPersonalAgentConfig(); setApiBase(""); setModel(""); setApiKey(""); setNotice("已清除本机个人配置"); };
+  const createWorkerPair = async () => {
+    const response = await fetch("/api/workers/pair", { method: "POST", headers: personalIdentityHeaders() }).catch(() => null);
+    const data = await response?.json().catch(() => null);
+    if (!response?.ok) { setNotice(data?.error || "生成 Worker 配对信息失败"); return; }
+    setWorkerConfig(`DASHBOARD_URL=${window.location.origin}\nWORKER_OWNER_ID=${data.ownerId}\nWORKER_PAIR_TOKEN=${data.pairToken}`);
+    setNotice("已生成，仅用于你的本机 Worker");
+  };
+  const copyWorkerPair = async () => {
+    if (!workerConfig) return;
+    await navigator.clipboard?.writeText(workerConfig).catch(() => undefined);
+    setNotice("已复制到剪贴板");
+  };
   return <>
     <button className={trigger === "menu" ? "personal-ai-menu-trigger" : "personal-ai-trigger"} type="button" aria-label="个人 AI 配置" onClick={() => setOpen(true)}>{trigger === "menu" ? "•••" : "个人 AI 配置"}</button>
     {open && <div className="personal-ai-layer" role="dialog" aria-modal="true" aria-labelledby="personal-ai-title"><div className="personal-ai-panel">
@@ -33,6 +47,7 @@ export default function PersonalAISettings({ trigger = "button" }: { trigger?: "
       <label><span>要使用的模型<small>API Key 只证明你有权限；还需要告诉系统用哪一个模型。</small></span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="例如 gpt-4.1-mini" autoComplete="off" /></label>
       <label>个人 API Key<input value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="仅保存在本机" type="password" autoComplete="off" /></label>
       <p className="personal-ai-note">仅支持兼容 OpenAI Chat Completions 的 HTTPS 接口。你的 Key 不会被保存到项目或服务器。</p>{notice && <p className="personal-ai-notice">{notice}</p>}
+      <section className="worker-pairing"><div><strong>本机研究 Worker</strong><p>让你电脑上已登录小红书的 Worker 只处理你创建的任务。</p></div><button type="button" onClick={() => { void createWorkerPair(); }}>生成本机配对信息</button>{workerConfig && <><pre>{workerConfig}</pre><button type="button" onClick={() => { void copyWorkerPair(); }}>复制配对信息</button></>}</section>
       <footer><button type="button" onClick={clear}>清除本机配置</button><button className="personal-ai-save" type="button" onClick={save}>保存配置</button></footer>
     </div></div>}
   </>;

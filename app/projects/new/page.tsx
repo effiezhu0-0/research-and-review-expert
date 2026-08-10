@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import DashboardSidebar from "../../components/DashboardSidebar";
 import FlowProgress from "../../components/FlowProgress";
 import { createResearchTask } from "../../lib/localResearchStore";
+import { personalIdentityHeaders } from "../../lib/personalIdentity";
 
 type DesignType = "interaction" | "brand";
 type ProjectStage = "before" | "review" | "live";
@@ -122,7 +123,7 @@ export default function NewProject() {
     try {
       const response = await fetch("/api/research/tasks", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...personalIdentityHeaders() },
         body: JSON.stringify(draft),
       });
       if (!response.ok) throw new Error("任务队列暂时不可用");

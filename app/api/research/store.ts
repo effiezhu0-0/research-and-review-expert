@@ -25,6 +25,8 @@ export async function ensureResearchSchema() {
       blocked_source TEXT,
       action_url TEXT,
       activity TEXT,
+      owner_id TEXT,
+      owner_name TEXT,
       attempts INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -82,6 +84,13 @@ export async function ensureResearchSchema() {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS research_worker_pairs (
+      owner_id TEXT PRIMARY KEY,
+      owner_name TEXT NOT NULL,
+      token_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`),
     DB.prepare("CREATE INDEX IF NOT EXISTS idx_research_tasks_status_created ON research_tasks(status, created_at)"),
     DB.prepare("CREATE INDEX IF NOT EXISTS idx_research_evidence_task ON research_evidence(task_id)"),
     DB.prepare("CREATE INDEX IF NOT EXISTS idx_research_candidates_task ON research_candidates(task_id, captured_at)"),
@@ -97,6 +106,9 @@ export async function ensureResearchSchema() {
   if (!names.has("activity")) {
     await DB.prepare("ALTER TABLE research_tasks ADD COLUMN activity TEXT").run();
   }
+  if (!names.has("owner_id")) await DB.prepare("ALTER TABLE research_tasks ADD COLUMN owner_id TEXT").run();
+  if (!names.has("owner_name")) await DB.prepare("ALTER TABLE research_tasks ADD COLUMN owner_name TEXT").run();
+  await DB.prepare("CREATE INDEX IF NOT EXISTS idx_research_tasks_owner_status ON research_tasks(owner_id, status, created_at)").run();
   const evidenceColumns = await DB.prepare("PRAGMA table_info(research_evidence)").all<{ name: string }>();
   const evidenceNames = new Set(evidenceColumns.results.map((column) => column.name));
   for (const [name, definition] of [
@@ -129,6 +141,8 @@ export function taskRow(row: Record<string, unknown>) {
     status: row.status,
     project: JSON.parse(String(row.payload || "{}")),
     workerId: row.worker_id,
+    ownerId: row.owner_id,
+    ownerName: row.owner_name,
     error: row.error,
     blockedSource: row.blocked_source,
     actionUrl: row.action_url,

@@ -1,12 +1,19 @@
 import { ensureResearchSchema, researchEnv, taskRow } from "../../store";
+import { tokenHash } from "../../identity";
 
 export async function POST(request: Request) {
   await ensureResearchSchema();
-  const { workerId = "browser-agent" } = await request.json().catch(() => ({}));
+  const { workerId = "browser-agent", ownerId, pairToken } = await request.json().catch(() => ({}));
+  if (!ownerId || !pairToken) return Response.json({ error: "个人 Worker 尚未配对" }, { status: 401 });
   const { DB } = researchEnv();
+  const pair = await DB.prepare("SELECT token_hash FROM research_worker_pairs WHERE owner_id = ?")
+    .bind(ownerId).first<{ token_hash: string }>();
+  if (!pair || pair.token_hash !== await tokenHash(String(pairToken))) {
+    return Response.json({ error: "Worker 配对信息无效，请在看板重新生成" }, { status: 401 });
+  }
   const candidate = await DB.prepare(
-    "SELECT * FROM research_tasks WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1"
-  ).first<Record<string, unknown>>();
+    "SELECT * FROM research_tasks WHERE status = 'queued' AND owner_id = ? ORDER BY created_at ASC LIMIT 1"
+  ).bind(ownerId).first<Record<string, unknown>>();
   if (!candidate) return new Response(null, { status: 204 });
 
   const now = new Date().toISOString();

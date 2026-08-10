@@ -82,11 +82,27 @@ test("personal AI settings remain in the current browser and travel only with st
   assert.match(settings, /仅保存在当前浏览器/);
   assert.match(settings, /从你购买或申请 API 的服务商文档中复制/);
   assert.match(settings, /personal-ai-close/);
+  assert.match(settings, /生成本机配对信息/);
   assert.match(settings, /type="password"/);
   assert.match(config, /localStorage/);
   assert.match(config, /x-design-lab-agent-api-key/);
   assert.match(sidebar, /PersonalAISettings trigger="menu"/);
   assert.match(sidebar, /api\/account/);
+});
+
+test("personal workers are paired and claim only their owner's tasks", async () => {
+  const [claim, pair, worker, taskRoute] = await Promise.all([
+    readFile(new URL("app/api/research/tasks/claim/route.ts", root), "utf8"),
+    readFile(new URL("app/api/workers/pair/route.ts", root), "utf8"),
+    readFile(new URL("scripts/playwright-research-worker.mjs", root), "utf8"),
+    readFile(new URL("app/api/research/tasks/route.ts", root), "utf8"),
+  ]);
+  assert.match(claim, /research_worker_pairs/);
+  assert.match(claim, /AND owner_id = \?/);
+  assert.match(pair, /research_worker_pairs/);
+  assert.match(worker, /WORKER_OWNER_ID/);
+  assert.match(worker, /WORKER_PAIR_TOKEN/);
+  assert.match(taskRoute, /owner_id, owner_name/);
 });
 
 test("returning to requirements preserves completed research until an explicit rerun", async () => {

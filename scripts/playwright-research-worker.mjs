@@ -9,6 +9,8 @@ import {
 const dashboardUrl = process.env.DASHBOARD_URL || "http://localhost:3000";
 const cdpUrl = process.env.CHROME_CDP_URL || "http://127.0.0.1:9222";
 const workerId = process.env.WORKER_ID || `design-lab-playwright-${process.pid}`;
+const workerOwnerId = process.env.WORKER_OWNER_ID || "";
+const workerPairToken = process.env.WORKER_PAIR_TOKEN || "";
 const pollMs = Number(process.env.RESEARCH_POLL_MS || 5000);
 const maxQueries = Number(process.env.RESEARCH_MAX_QUERIES || 3);
 const maxCandidates = Number(process.env.RESEARCH_MAX_CANDIDATES || 9);
@@ -541,6 +543,9 @@ console.log(
   `Playwright 研究服务已启动；看板：${dashboardUrl}；Chrome：${cdpUrl}；`
   + `恢复Agent：${agentConfigured ? "已启用" : "未配置"}`
 );
+if (!workerOwnerId || !workerPairToken) {
+  throw new Error("缺少 WORKER_OWNER_ID 或 WORKER_PAIR_TOKEN；请在看板左下角三个点中生成个人 Worker 配对信息");
+}
 const browser = await chromium.connectOverCDP(cdpUrl);
 const context = browser.contexts()[0] || await browser.newContext();
 
@@ -548,7 +553,7 @@ while (true) {
   try {
     const response = await api("/api/research/tasks/claim", {
       method: "POST",
-      body: JSON.stringify({ workerId }),
+      body: JSON.stringify({ workerId, ownerId: workerOwnerId, pairToken: workerPairToken }),
     });
     if (response.status === 204) {
       await sleep(pollMs);
