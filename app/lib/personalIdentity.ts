@@ -8,6 +8,5 @@ export function personalIdentityHeaders(): Record<string, string> {
   }
   return {
     "x-design-lab-device-id": id,
-    "x-design-lab-device-name": "当前使用者",
   };
 }
