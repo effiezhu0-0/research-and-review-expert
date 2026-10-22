@@ -23,7 +23,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   await ensureResearchSchema();
   const { id } = await context.params;
   const { status, error = null, blockedSource = null, actionUrl = null, activity = null } = await request.json();
-  if (!["queued", "running", "completed", "failed", "needs_login"].includes(status)) {
+  if (!["queued", "running", "awaiting_visual_confirmation", "completed", "failed", "needs_login"].includes(status)) {
     return Response.json({ error: "Invalid status" }, { status: 400 });
   }
   await researchEnv().DB.prepare(

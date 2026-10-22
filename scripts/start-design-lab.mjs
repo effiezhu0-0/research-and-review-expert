@@ -30,7 +30,7 @@ function processExists(pid) {
 if (existsSync(lockFile)) {
   const activePid = Number(readFileSync(lockFile, "utf8"));
   if (processExists(activePid)) {
-    console.log("Design Lab 已经在运行。");
+    console.log("设计调研与评审专家已经在运行。");
     await openDashboard();
     process.exit(0);
   }
@@ -39,12 +39,21 @@ if (existsSync(lockFile)) {
 writeFileSync(lockFile, String(process.pid));
 
 async function isReady(url) {
+  const candidates = [url];
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(1200) });
-    return response.ok;
-  } catch {
-    return false;
+    const parsed = new URL(url);
+    if (parsed.hostname === "localhost") {
+      parsed.hostname = "127.0.0.1";
+      candidates.push(parsed.toString());
+    }
+  } catch {}
+  for (const candidate of candidates) {
+    try {
+      const response = await fetch(candidate, { signal: AbortSignal.timeout(1200) });
+      if (response.ok) return true;
+    } catch {}
   }
+  return false;
 }
 
 async function waitUntil(url, label, timeoutMs = 30000) {
@@ -115,9 +124,14 @@ async function openDashboard() {
   try {
     const response = await fetch(`${cdpUrl}/json/new?${encodeURIComponent(dashboardUrl)}`, { method: "PUT" });
     if (!response.ok) throw new Error();
+    return;
   } catch {
     if (process.platform === "darwin") {
-      spawn("open", ["-a", "Google Chrome", dashboardUrl], { detached: true, stdio: "ignore" }).unref();
+      spawn(chromePath, [
+        `--user-data-dir=${chromeProfile}`,
+        `--remote-debugging-port=${new URL(cdpUrl).port || "9222"}`,
+        dashboardUrl,
+      ], { detached: true, stdio: "ignore" }).unref();
     }
   }
 }
@@ -125,7 +139,7 @@ async function openDashboard() {
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`\n正在停止 Design Lab…`);
+  console.log(`\n正在停止设计调研与评审专家…`);
   for (const { child } of children.reverse()) {
     if (!child.killed) child.kill("SIGTERM");
   }
@@ -138,16 +152,21 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("exit", () => rmSync(lockFile, { force: true }));
 
 try {
-  console.log("正在启动 Design Lab…");
+  console.log("正在启动设计调研与评审专家…");
   await ensureChrome();
   await ensureDashboard();
-  startChild(process.execPath, ["scripts/playwright-research-worker.mjs"], "Playwright研究服务");
+  if (process.env.WORKER_OWNER_ID && process.env.WORKER_PAIR_TOKEN) {
+    startChild(process.execPath, ["scripts/playwright-research-worker.mjs"], "Playwright研究服务");
+  } else {
+    console.log("提示：本机 Worker 尚未配对。请先在看板左下角三个点中生成配对信息，再重新运行此命令。");
+  }
   await openDashboard();
 
-  console.log("\nDesign Lab 已就绪");
+  console.log("\n设计调研与评审专家已就绪");
   console.log(`看板：${dashboardUrl}`);
-  console.log("研究范围：小红书（单来源模式）");
+  console.log("研究范围：小红书玩法与反馈 + Behance/Pinterest视觉趋势");
   console.log("按 Ctrl+C 可统一停止本次启动的服务。\n");
+  await new Promise(() => {});
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   await shutdown();

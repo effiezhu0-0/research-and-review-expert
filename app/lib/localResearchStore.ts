@@ -7,6 +7,8 @@ export type ProjectDraft = {
   projectMode?: string;
   answers?: Record<string, string[]>;
   customValues?: Record<string, string>;
+  meetingContext?: { link?: string; fileName?: string; extractedText?: string; pageCount?: number; keyPoints?: string[] };
+  decisionPosture?: number;
 };
 
 export type ResearchTask = {
@@ -17,9 +19,9 @@ export type ResearchTask = {
   project: ProjectDraft;
   keywords: string[];
   sources: Array<{
-    id: "xiaohongshu";
+    id: "xiaohongshu" | "behance" | "pinterest";
     label: string;
-    access: "chrome-agent";
+    access: "chrome-agent" | "browser-reference";
     requiredEvidence: string[];
   }>;
 };
@@ -57,7 +59,14 @@ export function buildResearchKeywords(draft: ProjectDraft) {
     .flat()
     .map((item) => item.replace(/（.*?）/g, "").trim());
   const custom = Object.values(draft.customValues || {}).filter(Boolean);
-  return [...new Set([draft.projectName || "", ...selected, ...custom].filter(Boolean))].slice(0, 12);
+  const meetingTerms = draft.meetingContext?.keyPoints?.length
+    ? draft.meetingContext.keyPoints
+    : String(draft.meetingContext?.extractedText || "")
+      .split(/[。！？；\n]/)
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 2 && item.length <= 28)
+      .slice(0, 4);
+  return [...new Set([draft.projectName || "", ...selected, ...custom, ...meetingTerms].filter(Boolean))].slice(0, 12);
 }
 
 export function createResearchTask(draft: ProjectDraft): ResearchTask {
@@ -74,6 +83,18 @@ export function createResearchTask(draft: ProjectDraft): ResearchTask {
         label: "小红书",
         access: "chrome-agent",
         requiredEvidence: ["完整帖子截图", "原文", "作者", "发布日期", "来源链接", "代表性评论"],
+      },
+      {
+        id: "behance",
+        label: "Behance",
+        access: "browser-reference",
+        requiredEvidence: ["完整项目页", "视觉机制", "公开图片地址", "来源链接"],
+      },
+      {
+        id: "pinterest",
+        label: "Pinterest",
+        access: "browser-reference",
+        requiredEvidence: ["参考图", "公开图片地址", "来源链接"],
       },
     ],
   };

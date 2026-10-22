@@ -5,6 +5,10 @@ import DashboardSidebar from "../../components/DashboardSidebar";
 import FlowProgress from "../../components/FlowProgress";
 import ProjectRequirementSummary from "../../components/ProjectRequirementSummary";
 import ProjectTopbar from "../../components/ProjectTopbar";
+import ResearchRunner from "../../components/ResearchRunner";
+import VisualTrendBoard from "../../components/VisualTrendBoard";
+import { personalAgentHeaders } from "../../lib/personalAgentConfig";
+import { saveCurrentProject } from "../../lib/savedProjects";
 
 type Opportunity = { title: string; detail: string; metric: string; evidenceCandidateIds: string[] };
 type Strategy = { title: string; action: string; metric: string; evidenceCandidateIds: string[]; evidenceQuotes: string[]; risk: string };
@@ -13,11 +17,27 @@ type StrategyResult = { summary: string; opportunities: Opportunity[]; strategie
 
 export default function StrategyPage() {
   const [result, setResult] = useState<StrategyResult | null>(null);
+  const [warning, setWarning] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [sourceCount, setSourceCount] = useState(0);
+  const [visualReady, setVisualReady] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [strategyProgress, setStrategyProgress] = useState(8);
+
+  const saveProject = () => {
+    const taskId = window.localStorage.getItem("design-lab-active-research-task") || "";
+    if (!taskId) return;
+    try {
+      const project = JSON.parse(window.localStorage.getItem("design-lab-project-draft") || "{}");
+      const name = String(project.projectName || "未命名项目").trim();
+      saveCurrentProject({ id: taskId, taskId, name, kind: "互动设计", stage: "归因结论", progress: 100, savedAt: new Date().toISOString(), route: "/projects/strategy", project });
+      setSaved(true);
+    } catch { setSaved(false); }
+  };
 
   useEffect(() => {
+    setWarning(window.sessionStorage.getItem("design-lab-strategy-warning") || "");
     const taskId = window.localStorage.getItem("design-lab-active-research-task") || "";
     if (!taskId) {
       queueMicrotask(() => {
@@ -26,10 +46,20 @@ export default function StrategyPage() {
       });
       return;
     }
-    fetch(`/api/research/tasks/${taskId}/strategies`, { cache: "no-store" })
+    const generationMode = window.sessionStorage.getItem("design-lab-generate-strategy");
+    const strategyRequest = generationMode
+      ? fetch(`/api/research/tasks/${taskId}/strategies`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...personalAgentHeaders() },
+          body: JSON.stringify({ force: generationMode === "force" }),
+        })
+      : fetch(`/api/research/tasks/${taskId}/strategies`, { cache: "no-store" });
+    strategyRequest
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "策略读取失败");
+        window.sessionStorage.removeItem("design-lab-generate-strategy");
+        if (data.warning) setWarning(data.warning);
         setResult(data.strategy);
         setSourceCount(data.sourceCandidateIds?.length || 0);
       })
@@ -37,9 +67,43 @@ export default function StrategyPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    const taskId = window.localStorage.getItem("design-lab-active-research-task") || "";
+    if (!taskId) return;
+    const startVisualResearch = async () => {
+      const response = await fetch(`/api/research/tasks/${taskId}`, { cache: "no-store" }).catch(() => null);
+      if (!response?.ok) return;
+      const data = await response.json();
+      const task = data.task;
+      if (task?.status === "completed") {
+        setVisualReady(true);
+        return;
+      }
+      if (task?.status === "awaiting_visual_confirmation" && task?.activity?.visualDirectionsConfirmed) {
+        await fetch(`/api/research/tasks/${taskId}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            status: "queued",
+            activity: { ...task.activity, executionRequested: true, executionRequestedAt: new Date().toISOString(), phase: "visual_reference_queued", message: "已进入策略页，等待收集视觉案例" },
+          }),
+        });
+      }
+    };
+    void startVisualResearch();
+  }, []);
+
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setInterval(() => {
+      setStrategyProgress((current) => Math.min(92, current + Math.max(1, Math.round((92 - current) / 14))));
+    }, 900);
+    return () => window.clearInterval(timer);
+  }, [loading]);
+
   return (
     <main className="research-page strategy-page">
-      <DashboardSidebar active="strategy" />
+      <DashboardSidebar projectActive />
       <section className="research-main">
         <ProjectTopbar section="归因结论" />
         <div className="strategy-content">
@@ -50,8 +114,9 @@ export default function StrategyPage() {
             <h1>从证据到可执行的设计方向。</h1>
             <span>{result?.summary || "根据已选择的小红书帖子与用户反馈，交叉提炼设计机会、策略动作和验证方向。"}</span>
           </div>
+          {warning && <div className="strategy-warning"><strong>已使用本地证据归纳</strong><span>{warning}。当前结果可继续编辑；恢复网络后可重新生成 Agent 版本。</span></div>}
 
-          {loading && <div className="evidence-empty"><strong>正在读取策略</strong><span>策略结果和证据关系正在加载。</span></div>}
+          {loading && <div className="strategy-generation-progress"><strong>Agent 正在生成设计策略与方向</strong><span>正在提炼所选案例、用户反馈与项目目标，请稍候。</span><i><b style={{ width: `${strategyProgress}%` }} /></i></div>}
           {!loading && error && <div className="evidence-empty"><strong>暂时没有可展示的策略</strong><span>{error}</span></div>}
           {result && <>
             <section className="strategy-evidence-summary">
@@ -103,9 +168,14 @@ export default function StrategyPage() {
             </section>
           </>}
 
+          <section className="strategy-visual-research">
+            {visualReady ? <VisualTrendBoard /> : <ResearchRunner onComplete={() => setVisualReady(true)} />}
+          </section>
+
           <footer className="strategy-footer">
             <button type="button" onClick={() => { window.location.href = "/projects/research"; }}>返回案例与反馈</button>
-            <button className="confirm-direction" type="button" disabled={!result} onClick={() => { window.location.href = "/projects/score"; }}>
+            <button className="save-project-button" type="button" disabled={!visualReady || !result || saved} onClick={saveProject}>{saved ? "项目已保存" : "保存项目"}</button>
+            <button className="confirm-direction" type="button" disabled={!result} onClick={() => { window.sessionStorage.setItem("design-lab-entry-source", "project-flow"); window.location.href = "/projects/import"; }}>
               进入方案评分 <img src="/arrow-right-regular.svg" alt="" />
             </button>
           </footer>

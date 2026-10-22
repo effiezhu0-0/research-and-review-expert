@@ -1566,7 +1566,7 @@ async function processTask(cdp, task) {
 }
 
 async function main() {
-  console.log(`Design Lab Browser Agent Worker 已启动：${workerId}`);
+  console.log(`设计调研与评审专家 Browser Agent Worker 已启动：${workerId}`);
   console.log(`看板：${dashboardUrl}；Chrome：${cdpUrl}`);
   const cdp = await connectChrome();
   while (true) {

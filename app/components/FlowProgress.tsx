@@ -1,9 +1,9 @@
 "use client";
 
-type FlowProgressProps = { active: 1 | 2 | 3 | 4 };
+type FlowProgressProps = { active: 1 | 2 | 3 };
 
-const steps = ["项目需求", "案例与反馈", "归因结论", "方案评分"];
-const paths = ["/projects/new", "/projects/research", "/projects/strategy", "/projects/score"];
+const steps = ["项目需求", "案例与反馈", "归因结论"];
+const paths = ["/projects/new", "/projects/research", "/projects/strategy"];
 
 export default function FlowProgress({ active }: FlowProgressProps) {
   return (

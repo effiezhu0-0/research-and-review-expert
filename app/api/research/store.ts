@@ -84,6 +84,28 @@ export async function ensureResearchSchema() {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS research_visual_samples (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      project_title TEXT NOT NULL,
+      project_url TEXT NOT NULL,
+      image_url TEXT,
+      author TEXT,
+      published_at TEXT,
+      captured_at TEXT NOT NULL,
+      trend_label TEXT NOT NULL,
+      visual_features TEXT NOT NULL DEFAULT '[]',
+      engagement INTEGER NOT NULL DEFAULT 0,
+      authority_tags TEXT NOT NULL DEFAULT '[]',
+      game_fit INTEGER NOT NULL DEFAULT 0,
+      visual_quality INTEGER NOT NULL DEFAULT 0,
+      analysis_reason TEXT,
+      selection_reason TEXT,
+      reference_type TEXT NOT NULL DEFAULT 'inspiration',
+      relevance_score INTEGER NOT NULL DEFAULT 0,
+      screenshot_key TEXT
+    )`),
     DB.prepare(`CREATE TABLE IF NOT EXISTS research_worker_pairs (
       owner_id TEXT PRIMARY KEY,
       owner_name TEXT NOT NULL,
@@ -94,6 +116,7 @@ export async function ensureResearchSchema() {
     DB.prepare("CREATE INDEX IF NOT EXISTS idx_research_tasks_status_created ON research_tasks(status, created_at)"),
     DB.prepare("CREATE INDEX IF NOT EXISTS idx_research_evidence_task ON research_evidence(task_id)"),
     DB.prepare("CREATE INDEX IF NOT EXISTS idx_research_candidates_task ON research_candidates(task_id, captured_at)"),
+    DB.prepare("CREATE INDEX IF NOT EXISTS idx_research_visual_samples_task ON research_visual_samples(task_id, captured_at)"),
   ]);
   const columns = await DB.prepare("PRAGMA table_info(research_tasks)").all<{ name: string }>();
   const names = new Set(columns.results.map((column) => column.name));
@@ -132,6 +155,20 @@ export async function ensureResearchSchema() {
   }
   if (!candidateNames.has("valuable_comments")) {
     await DB.prepare("ALTER TABLE research_candidates ADD COLUMN valuable_comments TEXT NOT NULL DEFAULT '[]'").run();
+  }
+  const visualColumns = await DB.prepare("PRAGMA table_info(research_visual_samples)").all<{ name: string }>();
+  const visualNames = new Set(visualColumns.results.map((column) => column.name));
+  for (const [name, definition] of [
+    ["authority_tags", "TEXT NOT NULL DEFAULT '[]'"],
+    ["game_fit", "INTEGER NOT NULL DEFAULT 0"],
+    ["visual_quality", "INTEGER NOT NULL DEFAULT 0"],
+    ["analysis_reason", "TEXT"],
+    ["selection_reason", "TEXT"],
+    ["reference_type", "TEXT NOT NULL DEFAULT 'inspiration'"],
+    ["relevance_score", "INTEGER NOT NULL DEFAULT 0"],
+    ["screenshot_key", "TEXT"],
+  ] as const) {
+    if (!visualNames.has(name)) await DB.prepare(`ALTER TABLE research_visual_samples ADD COLUMN ${name} ${definition}`).run();
   }
 }
 

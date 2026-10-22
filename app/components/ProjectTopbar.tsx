@@ -17,7 +17,7 @@ export default function ProjectTopbar({ section, demo = "静态演示数据" }: 
   return (
     <header className="project-topbar">
       <div><span>{projectName}</span><b>/</b><strong>{section}</strong></div>
-      <span className="demo-label">{demo}</span>
+      {demo === "可编辑" ? <button type="button" onClick={() => { window.location.href = "/"; }}>保存并退出</button> : <span className="demo-label">{demo}</span>}
     </header>
   );
 }

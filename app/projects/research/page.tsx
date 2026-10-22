@@ -7,7 +7,6 @@ import ProjectRequirementSummary from "../../components/ProjectRequirementSummar
 import ProjectTopbar from "../../components/ProjectTopbar";
 import ResearchRunner from "../../components/ResearchRunner";
 import CandidateCaseBoard from "../../components/CandidateCaseBoard";
-import { personalAgentHeaders } from "../../lib/personalAgentConfig";
 
 const cases = [
   { id: "sample-1", name: "淘宝夏日能量收集玩法", brand: "淘宝", platform: "小红书", media: "帖子截图", author: "电商玩法观察", date: "2026.07.18", type: "收集", goal: "促活", match: 94, tone: "lavender", insight: "帖子完整展示了入口、任务页和阶段奖励，适合观察进度反馈如何推动持续参与。", tags: ["进度反馈", "阶段奖励", "低门槛"] },
@@ -39,11 +38,26 @@ export default function ResearchPage() {
   const [researching, setResearching] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [hasGeneratedStrategy, setHasGeneratedStrategy] = useState(false);
+  const [researchStatus, setResearchStatus] = useState("queued");
 
   useEffect(() => {
-    setResearching(window.sessionStorage.getItem("design-lab-start-research") === "1");
+    const shouldStart = window.sessionStorage.getItem("design-lab-start-research") === "1";
+    setResearching(shouldStart);
     const taskId = window.localStorage.getItem("design-lab-active-research-task") || "";
     if (taskId) {
+      if (shouldStart) {
+        fetch(`/api/research/tasks/${taskId}`, { cache: "no-store" })
+          .then((response) => response.ok ? response.json() : null)
+          .then((data) => fetch(`/api/research/tasks/${taskId}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              status: "queued",
+              activity: { ...(data?.task?.activity || {}), executionRequested: true, executionRequestedAt: new Date().toISOString() },
+            }),
+          }))
+          .catch(() => undefined);
+      }
       fetch(`/api/research/tasks/${taskId}/strategies`, { cache: "no-store" })
         .then((response) => { if (response.ok) setHasGeneratedStrategy(true); })
         .catch(() => undefined);
@@ -59,31 +73,20 @@ export default function ResearchPage() {
     setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   };
 
-  const generateStrategies = async (force = false) => {
-    const taskId = window.localStorage.getItem("design-lab-active-research-task");
-    if (!taskId || !selected.length || generating) return;
+  const generateStrategies = (force = false) => {
+    if (!selected.length || generating) return;
     if (hasGeneratedStrategy && !force) {
       window.location.href = "/projects/strategy";
       return;
     }
     setGenerating(true);
-    const response = await fetch(`/api/research/tasks/${taskId}/strategies`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...personalAgentHeaders() },
-      body: JSON.stringify({ force }),
-    }).catch(() => null);
-    if (!response?.ok) {
-      const data = await response?.json().catch(() => null);
-      flash(data?.error || "策略生成失败，请稍后重试");
-      setGenerating(false);
-      return;
-    }
+    window.sessionStorage.setItem("design-lab-generate-strategy", force ? "force" : "create");
     window.location.href = "/projects/strategy";
   };
 
   return (
     <main className="research-page">
-      <DashboardSidebar active="cases" />
+      <DashboardSidebar projectActive />
 
       <section className="research-main">
         <ProjectTopbar section="案例与用户反馈" />
@@ -92,10 +95,13 @@ export default function ResearchPage() {
           <FlowProgress active={2} />
           <ProjectRequirementSummary />
           {researching ? (
-            <ResearchRunner onComplete={() => {
-              window.sessionStorage.removeItem("design-lab-start-research");
-              setResearching(false);
-            }} />
+            <>
+              {researchStatus === "awaiting_visual_confirmation" && <CandidateCaseBoard onSelectionChange={setSelected} />}
+              <ResearchRunner candidateSelectionCount={selected.length} onStatusChange={setResearchStatus} onConfirmDirections={() => generateStrategies(false)} onComplete={() => {
+                window.sessionStorage.removeItem("design-lab-start-research");
+                setResearching(false);
+              }} />
+            </>
           ) : (
           <>
           <CandidateCaseBoard onSelectionChange={setSelected} />
@@ -151,10 +157,10 @@ export default function ResearchPage() {
 
           <footer className="research-footer">
             <button type="button" onClick={() => { window.location.href = "/projects/new"; }}>返回修改需求</button>
-            {hasGeneratedStrategy && <button type="button" disabled={!selected.length || generating} onClick={() => { void generateStrategies(true); }}>
+            {hasGeneratedStrategy && <button type="button" disabled={!selected.length || generating} onClick={() => { generateStrategies(true); }}>
               按当前选择重新生成
             </button>}
-            <button className="generate-button" type="button" disabled={!selected.length || generating} onClick={() => { void generateStrategies(false); }}>
+            <button className="generate-button" type="button" disabled={!selected.length || generating} onClick={() => { generateStrategies(false); }}>
               {generating ? "正在提炼帖子与用户反馈…" : hasGeneratedStrategy ? "查看已生成归因" : `基于 ${selected.length} 个案例生成策略`} <span>→</span>
             </button>
           </footer>

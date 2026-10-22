@@ -1,18 +1,33 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DashboardSidebar from "./components/DashboardSidebar";
+import { openSavedProject, readSavedProjects, SavedProject } from "./lib/savedProjects";
 
-const projects = [
-  { name: "618 集卡互动优化", kind: "互动设计", stage: "方案评估", updated: "刚刚", color: "violet", progress: 68, icon: "集" },
-  { name: "Joy 夏日寻宝", kind: "互动设计", stage: "策略探索", updated: "昨天", color: "blue", progress: 34, icon: "寻" },
-  { name: "频道桌面图标升级", kind: "品牌设计", stage: "设计中", updated: "7月31日", color: "orange", progress: 52, icon: "标" },
-  { name: "年货节互动复盘", kind: "互动设计", stage: "上线复盘", updated: "7月28日", color: "green", progress: 100, icon: "年" },
-  { name: "Joy IP 表情资产", kind: "品牌设计", stage: "方案评估", updated: "7月25日", color: "pink", progress: 76, icon: "IP" },
-];
+type HomeProject = { saved: SavedProject; name: string; kind: string; stage: string; updated: string; color: string; progress: number; icon: string };
+
+const projectStages = ["策略探索", "设计中", "方案评估", "上线复盘"];
 
 export default function Home() {
   const [toast, setToast] = useState<string | null>(null);
+  const [projects, setProjects] = useState<HomeProject[]>([]);
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        setProjects(readSavedProjects().map((saved) => ({
+          saved,
+          name: saved.name,
+          kind: saved.kind,
+          stage: saved.stage,
+          updated: new Date(saved.savedAt).toLocaleDateString("zh-CN"),
+          color: "violet",
+          progress: saved.progress,
+          icon: saved.name.slice(0, 1),
+        })));
+      } catch { setProjects([]); }
+    });
+  }, []);
 
   const notify = (message: string) => {
     setToast(message);
@@ -21,7 +36,19 @@ export default function Home() {
 
   const openNewProject = () => {
     window.localStorage.removeItem("design-lab-project-draft");
+    window.localStorage.removeItem("design-lab-active-research-task");
+    window.localStorage.removeItem("design-lab-research-task");
+    window.localStorage.removeItem("design-lab-research-evidence");
+    window.sessionStorage.removeItem("design-lab-start-research");
+    window.sessionStorage.removeItem("design-lab-entry-source");
+    window.sessionStorage.removeItem("design-lab-solution-intake");
     window.location.href = `/projects/new?fresh=${Date.now()}`;
+  };
+  const openStageProject = (entry: "import" | "retrospective") => {
+    window.localStorage.removeItem("design-lab-project-draft");
+    window.sessionStorage.removeItem("design-lab-solution-intake");
+    window.sessionStorage.setItem("design-lab-entry-source", `homepage-${entry}`);
+    window.location.href = `/projects/new?fresh=${Date.now()}&entry=${entry}`;
   };
 
   return (
@@ -56,12 +83,12 @@ export default function Home() {
                 <div><strong>创建空白项目</strong><small>从项目需求开始建立研究</small></div>
                 <b>→</b>
               </button>
-              <button type="button" onClick={() => notify("导入已有方案")}>
+              <button type="button" onClick={() => openStageProject("import")}>
                 <span className="quick-icon orange-bg">⇧</span>
                 <div><strong>导入已有方案</strong><small>进入方案评分与优化流程</small></div>
                 <b>→</b>
               </button>
-              <button type="button" onClick={() => notify("创建上线复盘")}>
+              <button type="button" onClick={() => openStageProject("retrospective")}>
                 <span className="quick-icon green-bg">↗</span>
                 <div><strong>创建上线复盘</strong><small>录入指标并验证设计判断</small></div>
                 <b>→</b>
@@ -79,30 +106,30 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="project-list">
+            {projects.length ? <div className="project-list">
               <div className="list-header">
                 <span>项目</span><span>类型</span><span>当前阶段</span><span>进度</span><span>最近更新</span><span />
               </div>
               {projects.map((project) => (
-                <button className="project-row" type="button" key={project.name} onClick={() => notify(`打开：${project.name}`)}>
+                <div className="project-row" key={project.saved.id} onClick={() => openSavedProject(project.saved)}>
                   <span className="project-name">
                     <i className={`project-icon ${project.color}`}>{project.icon}</i>
                     <span><strong>{project.name}</strong><small>设计团队 · 内部项目</small></span>
                   </span>
                   <span><em className={`type-pill ${project.kind === "品牌设计" ? "brand-type" : ""}`}>{project.kind}</em></span>
-                  <span className="stage"><i />{project.stage}</span>
+                  <button className="stage" type="button" onClick={(event) => { event.stopPropagation(); setProjects((current) => current.map((item) => item.name === project.name ? { ...item, stage: projectStages[(projectStages.indexOf(item.stage) + 1) % projectStages.length] } : item)); }} title="点击切换状态"><i />{project.stage}<b>⌄</b></button>
                   <span className="progress"><i><b style={{ width: `${project.progress}%` }} /></i><small>{project.progress}%</small></span>
                   <span className="updated">{project.updated}</span>
                   <span className="more">•••</span>
-                </button>
+                </div>
               ))}
-            </div>
+            </div> : <div className="projects-empty"><strong>还没有项目</strong><span>创建项目后，它会出现在这里。</span><button type="button" onClick={openNewProject}>创建第一个项目</button></div>}
           </section>
 
-          <section className="insight-strip">
+          {projects.length > 0 && <section className="insight-strip">
             <div><span className="spark">✦</span><p><strong>研究资产本周新增 12 条</strong><small>5 个竞品案例、4 条用户反馈、3 条设计策略</small></p></div>
             <button type="button" onClick={() => notify("查看本周新增研究资产")}>查看更新 →</button>
-          </section>
+          </section>}
         </div>
       </section>
 

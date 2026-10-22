@@ -6,27 +6,63 @@ import {
   ensureResearchTask,
   ResearchTask,
 } from "../lib/localResearchStore";
+import PlatformLogo from "./PlatformLogo";
+import { normalizeDesignField, researchProfiles } from "../lib/researchProfiles";
 
-type TaskState = "queued" | "running" | "completed" | "failed" | "needs_login" | "local";
-type Draft = { answers?: Record<string, string[]>; customValues?: Record<string, string> };
+type TaskState = "queued" | "running" | "awaiting_visual_confirmation" | "completed" | "failed" | "needs_login" | "local";
 type ResearchActivity = {
-  phase?: "starting" | "searching" | "filtering" | "reading" | "saved" | "retrying" | "cooldown" | "completed" | "needs_login" | "failed";
+  phase?: string;
   currentQuery?: string;
   queryIndex?: number;
   queryTotal?: number;
   browsedCount?: number;
   matchedCount?: number;
   detailCount?: number;
-  agentCalls?: number;
+  agentRecoveryCalls?: number;
+  agentSummaryCalls?: number;
+  visualSampleCount?: number;
+  visualSourceCounts?: Record<string, number>;
+  degraded?: boolean;
+  degradationReason?: string;
+  visualOnly?: boolean;
+  visualDirections?: Array<{ label: string; sourceNames?: string[]; rationale?: string; sampleIds?: string[] }>;
+  visualDirectionsConfirmed?: boolean;
+  visualPlatforms?: string[];
+  sourceProgress?: Record<string, {
+    phase?: string;
+    progress?: number;
+    queryIndex?: number;
+    queryTotal?: number;
+    browsed?: number;
+    reviewed?: number;
+    eligible?: number;
+    saved?: number;
+    currentTitle?: string;
+    error?: string;
+  }>;
   message?: string;
   updatedAt?: string;
 };
 
 const sourceCopy = [
-  { id: "xiaohongshu", name: "小红书", detail: "竞品帖子、正文、截图与评论" },
+  { id: "xiaohongshu", platform: "xiaohongshu" as const, name: "玩法案例", detail: "进入小红书帖子，采集玩法与真实反馈" },
+  { id: "xiaohongshuVisual", platform: "xiaohongshu" as const, name: "竞品视觉", detail: "识别主要竞品并逐个采集视觉案例" },
+  { id: "officialTrends", name: "趋势对照", detail: "读取官方趋势并与竞品视觉特征交叉比较" },
+];
+const referenceSourceCopy = [
+  { id: "behance", platform: "behance" as const, name: "Behance", detail: "逐条进入项目详情，分析完整视觉系统" },
+  { id: "pinterest", platform: "pinterest" as const, name: "Pinterest", detail: "逐条进入 Pin 详情，采集视觉参考" },
+  { id: "huaban", platform: "huaban" as const, name: "花瓣", detail: "逐条进入采集详情，补充中文视觉参考" },
+  { id: "dribbble", platform: "dribbble" as const, name: "Dribbble", detail: "进入 Shot 详情，研究界面与动效表达" },
+  { id: "zcool", platform: "zcool" as const, name: "ZCOOL", detail: "进入作品详情，补充中文市场执行案例" },
 ];
 
-export default function ResearchRunner({ onComplete }: { onComplete: () => void }) {
+export default function ResearchRunner({ onComplete, candidateSelectionCount = 0, onConfirmDirections, onStatusChange }: {
+  onComplete: () => void;
+  candidateSelectionCount?: number;
+  onConfirmDirections?: () => Promise<void> | void;
+  onStatusChange?: (status: TaskState) => void;
+}) {
   const [taskId, setTaskId] = useState("");
   const [status, setStatus] = useState<TaskState>("queued");
   const [error, setError] = useState("");
@@ -35,17 +71,16 @@ export default function ResearchRunner({ onComplete }: { onComplete: () => void 
   const [candidateCount, setCandidateCount] = useState(0);
   const [activity, setActivity] = useState<ResearchActivity | null>(null);
   const [localTask, setLocalTask] = useState<ResearchTask | null>(null);
-  const [draft, setDraft] = useState<Draft>({});
   const [clock, setClock] = useState(0);
+  const [visualCandidates, setVisualCandidates] = useState<Array<{ id: string; title: string; url?: string; keywords?: string[]; excerpt?: string; mediaKeys?: string[]; screenshotKey?: string }>>([]);
+  const [confirming, setConfirming] = useState(false);
+  const [selectedDirections, setSelectedDirections] = useState<string[]>([]);
+  const [designField, setDesignField] = useState<"interaction" | "brand" | "marketing">("interaction");
 
   useEffect(() => {
-    let nextDraft: Draft = {};
-    try {
-      nextDraft = JSON.parse(window.localStorage.getItem("design-lab-project-draft") || "{}");
-    } catch {}
     const id = window.localStorage.getItem("design-lab-active-research-task") || "";
+    try { setDesignField(normalizeDesignField(JSON.parse(window.localStorage.getItem("design-lab-project-draft") || "{}").designType)); } catch { /* keep default */ }
     queueMicrotask(() => {
-      setDraft(nextDraft);
       setTaskId(id);
       if (!id) {
         setLocalTask(ensureResearchTask());
@@ -74,11 +109,16 @@ export default function ResearchRunner({ onComplete }: { onComplete: () => void 
         const data = await response.json();
         if (stopped) return;
         setStatus(data.task.status);
+        onStatusChange?.(data.task.status);
         setError(data.task.error || "");
         setBlockedSource(data.task.blockedSource || "");
         setActionUrl(data.task.actionUrl || "");
         setCandidateCount(data.candidateCount || 0);
         setActivity(data.task.activity || null);
+        if (data.task.status === "awaiting_visual_confirmation") {
+          const candidates = await fetch(`/api/research/tasks/${taskId}/candidates`, { cache: "no-store" }).then((result) => result.json()).catch(() => ({ candidates: [] }));
+          if (!stopped) setVisualCandidates((candidates.candidates || []).filter((item: { source?: string }) => item.source === "xiaohongshu_visual"));
+        }
         if (data.task.status === "completed") {
           window.sessionStorage.removeItem("design-lab-start-research");
           window.setTimeout(onComplete, 650);
@@ -90,41 +130,48 @@ export default function ResearchRunner({ onComplete }: { onComplete: () => void 
     check();
     const timer = window.setInterval(check, 2500);
     return () => { stopped = true; window.clearInterval(timer); };
-  }, [taskId, onComplete]);
+  }, [taskId, onComplete, onStatusChange]);
 
-  const keywords = useMemo(() => {
-    const values = Object.values(draft.answers || {}).flat().map((item) => item.replace(/（.*?）/g, ""));
-    const customs = Object.values(draft.customValues || {}).filter(Boolean);
-    return [...new Set([...values, ...customs])].slice(0, 8);
-  }, [draft]);
+  useEffect(() => {
+    if (status !== "awaiting_visual_confirmation" || !activity?.visualDirections?.length) return;
+    setSelectedDirections(activity.visualDirections.slice(0, 4).map((direction) => direction.label));
+  }, [status, activity?.visualDirections]);
 
-  const headline = status === "queued" ? "研究任务正在排队"
-    : status === "running" ? "Agent收集案例和反馈中..."
+  const referenceStage = Boolean(activity?.visualDirectionsConfirmed);
+  const fieldResearchName = designField === "brand" ? "数字品牌案例与反馈" : designField === "marketing" ? "大促案例与反馈" : "小红书玩法案例";
+  const runningHeadline = referenceStage ? `${researchProfiles[designField].referenceSources.length}个视觉平台正在同步研究`
+    : activity?.phase === "xhs_competitor_discovery" ? "正在识别主要竞品"
+      : activity?.phase === "xhs_visual_searching" ? "竞品视觉案例研究中"
+      : activity?.phase === "official_trend_reading" ? "视觉趋势交叉分析中"
+        : `${fieldResearchName}研究中`;
+  const headline = status === "queued" ? (referenceStage ? "视觉参考收集正在排队" : `${fieldResearchName}研究正在排队`)
+    : status === "running" ? runningHeadline
+      : status === "awaiting_visual_confirmation" ? "确认4个视觉方向"
       : status === "completed" ? `已找到 ${candidateCount} 个候选案例`
         : status === "needs_login" ? "小红书搜索需要安全验证"
           : status === "failed" ? "研究任务执行失败"
             : "本地研究任务已准备";
   const progress = useMemo(() => {
     if (status === "completed") return 100;
-    if (status !== "running" || !activity?.queryTotal) return 0;
-    const phaseWeight = activity.phase === "searching" ? 0.18
-      : activity.phase === "filtering" ? 0.48
-        : activity.phase === "reading" ? 0.7
-          : activity.phase === "saved" ? 0.9
-            : activity.phase === "retrying" ? 0.12 : 0;
-    const completedQueries = Math.max(0, (activity.queryIndex || 1) - 1);
-    return Math.min(96, Math.round(((completedQueries + phaseWeight) / activity.queryTotal) * 100));
+    if (status === "awaiting_visual_confirmation") return 100;
+    if (status !== "running" || !activity?.sourceProgress) return 0;
+    const sources = Object.values(activity.sourceProgress).filter((source) => source.phase !== "skipped");
+    if (!sources.length) return 0;
+    return Math.min(99, Math.round(sources.reduce((sum, source) => sum + Number(source.progress || 0), 0) / sources.length));
   }, [status, activity]);
   const sourceLabel = blockedSource === "xiaohongshu" ? "小红书" : "小红书";
   const heartbeatAge = activity?.updatedAt ? clock - new Date(activity.updatedAt).getTime() : 0;
   const slow = status === "running" && heartbeatAge > 45000;
+  const profileSources = researchProfiles[designField].researchSources.map((name, index) => ({ id: `profile-${index}`, name, detail: designField === "brand" ? "按数字载体保留完整来源证据" : "按会场与开屏边界保留完整来源证据" }));
+  const referenceIds = designField === "interaction" ? ["behance", "pinterest", "zcool"] : ["pinterest", "behance", "zcool"];
+  const visibleSources = activity?.visualDirectionsConfirmed ? referenceSourceCopy.filter((source) => referenceIds.includes(source.id)) : designField === "interaction" ? sourceCopy : profileSources;
 
   const resumeResearch = async () => {
     if (!taskId) return;
     const response = await fetch(`/api/research/tasks/${taskId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ status: "queued" }),
+      body: JSON.stringify({ status: "queued", activity: { ...activity, executionRequested: true, executionRequestedAt: new Date().toISOString() } }),
     });
     if (response.ok) {
       setStatus("queued");
@@ -132,6 +179,22 @@ export default function ResearchRunner({ onComplete }: { onComplete: () => void 
       setBlockedSource("");
       setActionUrl("");
     }
+  };
+
+  const confirmVisualDirections = async () => {
+    if (!taskId || confirming || selectedDirections.length !== 4 || !candidateSelectionCount) return;
+    setConfirming(true);
+    const chosenDirections = (activity?.visualDirections || []).filter((direction) => selectedDirections.includes(direction.label));
+    const response = await fetch(`/api/research/tasks/${taskId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        status: "awaiting_visual_confirmation",
+        activity: { ...activity, visualDirections: chosenDirections, visualDirectionsConfirmed: true, phase: "visual_reference_pending", message: "案例与视觉方向已确认" },
+      }),
+    }).catch(() => null);
+    if (response?.ok) await onConfirmDirections?.();
+    setConfirming(false);
   };
 
   return (
@@ -143,27 +206,52 @@ export default function ResearchRunner({ onComplete }: { onComplete: () => void 
       <div className="runner-progress"><i style={{ width: `${progress}%` }} /></div>
       {status === "running" && (
         <div className={`runner-activity ${slow ? "slow" : ""}`} role="status">
-          <strong>{slow ? "页面响应较慢，Agent正在自动恢复" : activity?.message || "正在准备小红书研究"}</strong>
+          <strong>{slow ? "部分页面响应较慢，Agent正在自动恢复" : runningHeadline}</strong>
           <span>
-            关键词 {activity?.queryIndex || 0}/{activity?.queryTotal || 0}
-            <b>·</b> 已浏览 {activity?.browsedCount || 0} 条
-            <b>·</b> 相关 {activity?.matchedCount || 0} 条
-            <b>·</b> 候选 {activity?.detailCount || candidateCount} 条
-            {(activity?.agentCalls || 0) > 0 && <><b>·</b> Agent恢复 {activity?.agentCalls} 次</>}
+            {referenceStage ? `${researchProfiles[designField].referenceSources.length}个视觉平台同步进入详情页研究` : designField === "interaction" ? "先收集玩法反馈，再识别竞品并研究其视觉案例" : "先收集标准、案例与反馈，再归纳候选视觉方向"}
+            <b>·</b> 玩法案例 {activity?.detailCount || candidateCount} 条
+            <b>·</b> 视觉样本 {activity?.visualSampleCount || 0} 条
+            {(activity?.agentRecoveryCalls || 0) > 0 && <><b>·</b> Agent协助 {activity?.agentRecoveryCalls} 次</>}
+            {(activity?.agentSummaryCalls || 0) > 0 && <><b>·</b> 内容提炼 {activity?.agentSummaryCalls} 次</>}
           </span>
-          {activity?.currentQuery && <em>当前：{activity.currentQuery}</em>}
+          <em>搜索、进入详情、分析与保存均计入当前阶段进度</em>
         </div>
       )}
-      <div className="runner-keywords"><small>本次检索条件</small><div>{(keywords.length ? keywords : ["营销互动", "用户反馈", "竞品案例"]).map((word) => <span key={word}>{word}</span>)}</div></div>
       <div className="runner-sources">
-        {sourceCopy.map((source, index) => (
-          <article className={`source-${source.id} ${status === "completed" ? "done" : status === "running" ? "active" : ""}`} key={source.name}>
-            <i>{status === "completed" ? "✓" : index + 1}</i>
-            <div><strong>{source.name}</strong><small>{source.detail}</small></div>
-            <span>{status === "completed" ? "已完成" : status === "running" ? "采集中" : "等待中"}</span>
+        {visibleSources.map((source) => (
+          <article className={`source-${source.id} ${activity?.sourceProgress?.[source.id]?.phase && !["queued", "completed", "skipped"].includes(activity.sourceProgress[source.id].phase || "") ? "active" : ""}`} key={source.name}>
+            <div className="runner-source-copy"><strong>{"platform" in source && source.platform && <PlatformLogo platform={source.platform} />} {source.name}</strong><small>{source.detail}</small></div>
+            <span>{source.id.startsWith("profile-") ? (status === "completed" || status === "awaiting_visual_confirmation" ? "已完成" : "研究中") : source.id === "officialTrends"
+              ? (activity?.sourceProgress?.[source.id]?.phase === "completed" ? "已完成" : "研究中")
+              : referenceIds.includes(source.id)
+                ? `已浏览详情 ${activity?.sourceProgress?.[source.id]?.reviewed || 0}/40 · ${status === "completed" ? "入选" : "有效候选"} ${status === "completed" ? activity?.sourceProgress?.[source.id]?.saved || 0 : activity?.sourceProgress?.[source.id]?.eligible || 0}`
+                : `案例 ${activity?.sourceProgress?.[source.id]?.saved || 0} 条`}</span>
           </article>
         ))}
       </div>
+      {status === "awaiting_visual_confirmation" && (
+        <section className="visual-direction-confirmation">
+          <header><div><small>VISUAL DIRECTIONS</small><h2>竞品视觉特征 × 官方趋势</h2></div><span>确认后才生成搜索词</span></header>
+          <div className="visual-direction-grid">
+            {(activity?.visualDirections || []).map((direction) => {
+              const examples = visualCandidates.filter((item) => direction.sampleIds?.includes(item.id));
+              const isSelected = selectedDirections.includes(direction.label);
+              return <article className={isSelected ? "selected" : ""} key={direction.label} onClick={() => setSelectedDirections((current) => isSelected ? current.filter((label) => label !== direction.label) : [...current, direction.label])}>
+                <h3>{direction.label}</h3>
+                <p>{direction.rationale}</p>
+                <div className="visual-direction-examples">{examples.map((item) => (
+                  <a key={item.id} href={item.url} target="_blank" rel="noreferrer">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={item.mediaKeys?.length ? `/api/research/tasks/${taskId}/candidates/${item.id}/media/0` : `/api/research/tasks/${taskId}/candidates/${item.id}/screenshot`} alt={item.title} />
+                    <span>{item.title}</span>
+                  </a>
+                ))}</div>
+              </article>;
+            })}
+          </div>
+          <button className="primary" type="button" disabled={confirming || selectedDirections.length !== 4 || !candidateSelectionCount} onClick={() => void confirmVisualDirections()}>{confirming ? "正在进入下一步…" : `确认 ${candidateSelectionCount} 个案例与 4 个视觉方向`}</button>
+        </section>
+      )}
       {status === "needs_login" && (
         <div className="runner-action-panel login">
           <div><strong>请完成{sourceLabel}安全验证</strong><span>任务已经暂停，不会在后台继续请求。若验证页提示“请求太频繁”，请不要刷新，先等待至少 10 分钟，再从小红书首页确认登录状态。</span></div>

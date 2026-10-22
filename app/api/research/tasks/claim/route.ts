@@ -12,7 +12,10 @@ export async function POST(request: Request) {
     return Response.json({ error: "Worker 配对信息无效，请在看板重新生成" }, { status: 401 });
   }
   const candidate = await DB.prepare(
-    "SELECT * FROM research_tasks WHERE status = 'queued' AND owner_id = ? ORDER BY created_at ASC LIMIT 1"
+    `SELECT * FROM research_tasks
+     WHERE status = 'queued' AND owner_id = ?
+       AND json_extract(COALESCE(activity, '{}'), '$.executionRequested') = 1
+     ORDER BY updated_at ASC LIMIT 1`
   ).bind(ownerId).first<Record<string, unknown>>();
   if (!candidate) return new Response(null, { status: 204 });
 
