@@ -28,7 +28,7 @@ const normalizeMetrics = (metrics: string[]) => [...new Set(metrics.flatMap((met
 export default function ImportSolutionPage() {
   const [projectName, setProjectName] = useState("");
   const [solutionName, setSolutionName] = useState("");
-  const [version, setVersion] = useState("V1.0");
+  const [version, setVersion] = useState("");
   const [sourceLink, setSourceLink] = useState("");
   const [fileName, setFileName] = useState("");
   const [points, setPoints] = useState<DesignPoint[]>([]);
@@ -48,6 +48,8 @@ export default function ImportSolutionPage() {
     try {
       const draft = JSON.parse(window.localStorage.getItem("design-lab-project-draft") || "{}");
       setProjectName(draft.projectName || "");
+      setSolutionName(draft.solutionName || "");
+      setVersion(draft.version || "");
     } catch { /* use empty state */ }
   }, []);
 
@@ -71,7 +73,7 @@ export default function ImportSolutionPage() {
     if (!projectName.trim() || !solutionName.trim() || !validPoints.length) {
       setToast("请填写项目、方案名称，并至少添加一个设计点"); return;
     }
-    saveSolution({ projectName: projectName.trim(), solutionName: solutionName.trim(), version: version.trim() || "V1.0", sourceLink: sourceLink.trim(), fileName, importedAt: new Date().toISOString(), designPoints: validPoints });
+    saveSolution({ projectName: projectName.trim(), solutionName: solutionName.trim(), version: version.trim(), sourceLink: sourceLink.trim(), fileName, importedAt: new Date().toISOString(), designPoints: validPoints });
     window.localStorage.setItem("design-lab-project-draft", JSON.stringify({ projectName: projectName.trim(), stage: "review" }));
     window.location.href = "/projects/score";
   };
@@ -117,7 +119,7 @@ export default function ImportSolutionPage() {
           <div className="workflow-heading"><div><small>01</small><h2>方案信息</h2></div></div>
           <div className="form-grid">
             <label>方案名称<input value={solutionName} onChange={(e) => setSolutionName(e.target.value)} placeholder="例如：集卡主流程优化方案" /></label>
-            <label>版本<input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="V1.0" /></label>
+            <label>版本<input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="例如：V1.0" /></label>
           </div>
           <div className="solution-source"><label className="file-picker" onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add("dragging"); }} onDragLeave={(event) => event.currentTarget.classList.remove("dragging")} onDrop={(event) => { event.preventDefault(); event.currentTarget.classList.remove("dragging"); void loadFiles(Array.from(event.dataTransfer.files || [])); }}><input type="file" accept="image/*" multiple onChange={chooseFile} /><span>⇧</span><b>{fileName || "拖拽或上传方案截图、流程图"}</b><small>{fileName ? "点击或拖拽可替换，最多 5 张" : "下一步将由 Agent 识别关键设计点"}</small></label>{images.length > 0 && <button className="remove-solution-images" type="button" onClick={() => { setImages([]); setFileName(""); }}>移除</button>}</div>
           {images.length > 0 && <div className="image-preview-row">{images.map((item) => <figure key={item.name}><img src={item.dataUrl} alt={item.name} /><figcaption>{item.name}</figcaption></figure>)}</div>}

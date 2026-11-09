@@ -1,42 +1,59 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, type CSSProperties, useEffect, useMemo, useState } from "react";
 import DashboardSidebar from "../../components/DashboardSidebar";
 import FlowProgress from "../../components/FlowProgress";
 import StageProgress from "../../components/StageProgress";
+import NightingaleIcon from "../../components/NightingaleIcon";
 import { createResearchTask } from "../../lib/localResearchStore";
 import { extractMeetingPdf, MeetingContext } from "../../lib/meetingNotes";
 import { personalIdentityHeaders } from "../../lib/personalIdentity";
 import { personalAgentHeaders } from "../../lib/personalAgentConfig";
 import { saveSolutionImages } from "../../lib/solutionImageStore";
+import { saveCurrentProject } from "../../lib/savedProjects";
 
 type DesignType = "interaction" | "brand" | "marketing";
 type ProjectStage = "before" | "review" | "live";
+type ResearchMode = "play" | "visual";
+type FeedbackPlatform = "xiaohongshu" | "weibo" | "voiceOfUser";
+const feedbackPlatforms: { id: FeedbackPlatform; label: string; detail: string }[] = [
+  { id: "xiaohongshu", label: "小红书", detail: "帖子与评论" },
+  { id: "weibo", label: "微博", detail: "相关讨论" },
+  { id: "voiceOfUser", label: "用户之声", detail: "用户问题与体验" },
+];
 const draftKey = "design-lab-project-draft";
+const projectIdKey = "design-lab-current-project-id";
+
+function getProjectId() {
+  const existing = window.localStorage.getItem(projectIdKey);
+  if (existing) return existing;
+  const id = `project-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  window.localStorage.setItem(projectIdKey, id);
+  return id;
+}
+
+function projectKind(type: DesignType) {
+  return type === "brand" ? "品牌设计" : type === "marketing" ? "大促设计" : "互动设计";
+}
 
 function DesignDirectionIcon({ type }: { type: DesignType }) {
   return (
     <i className={`direction-icon direction-icon-${type}`} aria-hidden="true">
-      {type === "interaction" ? (
-        <svg viewBox="0 0 24 24" focusable="false">
-          <path d="M8.2 7.5h7.6c2.2 0 3.8 1.3 4.3 3.5l.9 4.1c.5 2.2-.6 3.9-2.4 3.9-1 0-1.6-.5-2.4-1.5l-1.1-1.4H8.9l-1.1 1.4C7 18.5 6.4 19 5.4 19 3.6 19 2.5 17.3 3 15.1l.9-4.1c.5-2.2 2.1-3.5 4.3-3.5Z" />
-          <path d="M8 10.5v3M6.5 12h3M16.4 11.2h.1M18 13h.1" />
-        </svg>
-      ) : type === "brand" ? (
-        <svg viewBox="0 0 24 24" focusable="false">
-          <path d="m12 3 7.2 4.2v8.3L12 19.7l-7.2-4.2V7.2L12 3Z" />
-          <circle cx="12" cy="11.4" r="3.2" />
-          <path d="M9.8 17.9 12 21l2.2-3.1" />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 24 24" focusable="false">
-          <rect x="3.5" y="4" width="17" height="16" rx="2.5" />
-          <path d="M3.5 8.5h17M8.5 8.5V20M11.5 12h5.5M11.5 15.5H17" />
-          <circle cx="6.1" cy="6.25" r=".55" fill="currentColor" stroke="none" />
-        </svg>
-      )}
+      <img src={`/icons/direction-card/${type}-24.svg`} alt="" width={24} height={24} />
     </i>
   );
+}
+
+const designDirections: { type: DesignType; title: string; description: string }[] = [
+  { type: "interaction", title: "互动域", description: "玩法、流程、反馈与激励" },
+  { type: "marketing", title: "营销域", description: "大促会场、开屏广告与活动心智" },
+  { type: "brand", title: "品牌域", description: "图标、启动屏、品牌 IP 与主视觉" },
+];
+
+function DesignDirectionCard({ direction, selected, onSelect }: { direction: typeof designDirections[number]; selected: boolean; onSelect: (type: DesignType) => void }) {
+  return <button className={selected ? `selected ${direction.type}-selected` : ""} type="button" aria-pressed={selected} onClick={() => onSelect(direction.type)}>
+    <DesignDirectionIcon type={direction.type} /><span><strong>{direction.title}</strong><small>{direction.description}</small></span>
+  </button>;
 }
 
 const optionGroups = [
@@ -69,15 +86,25 @@ const marketingOptionGroups = [
   { key: "goal", title: "优先目标", single: false, custom: true, options: ["建立大促心智", "突出核心利益", "提升会场分流", "强化商品转化", "保持触点一致"] },
   { key: "perception", title: "核心感知", single: false, custom: true, options: ["热烈", "明确", "可信", "新鲜", "高效", "有品质"] },
   { key: "boundary", title: "研究边界", single: false, custom: true, options: ["电商大促频道会场", "开屏广告"] },
-  { key: "campaign", title: "活动节点", single: true, custom: true, options: ["618", "双11", "年货节", "品牌日", "日常大促", "暂不确定"] },
+  { key: "campaign", title: "活动节点", single: true, custom: true, options: ["618", "双11", "年货节", "跨年", "中秋节", "端午节", "圣诞节", "七夕", "情人节"] },
 ];
 
 export default function NewProject() {
   const [designType, setDesignType] = useState<DesignType>("interaction");
   const [stage, setStage] = useState<ProjectStage>("before");
   const [projectName, setProjectName] = useState("");
-  const [projectMode, setProjectMode] = useState("新互动");
+  const projectMode = "需求项目";
+  const [researchMode, setResearchMode] = useState<ResearchMode>("play");
+  const [feedbackPlatformsSelected, setFeedbackPlatformsSelected] = useState<FeedbackPlatform[]>(["xiaohongshu", "weibo", "voiceOfUser"]);
+  const [feedbackStartDate, setFeedbackStartDate] = useState("");
+  const [feedbackEndDate, setFeedbackEndDate] = useState("");
+  const [researchKeywords, setResearchKeywords] = useState<string[]>([]);
+  const [keywordDraft, setKeywordDraft] = useState("");
+  const [recommendedKeywords, setRecommendedKeywords] = useState<string[]>([]);
+  const [recommendingKeywords, setRecommendingKeywords] = useState(false);
+  const [keywordNotice, setKeywordNotice] = useState("");
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
+  const [customOptions, setCustomOptions] = useState<Record<string, string[]>>({});
   const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({});
   const [customValues, setCustomValues] = useState<Record<string, string>>({});
   const [meetingContext, setMeetingContext] = useState<MeetingContext>({});
@@ -101,6 +128,7 @@ export default function NewProject() {
     const isFreshProject = params.has("fresh");
     if (isFreshProject) {
       window.localStorage.removeItem(draftKey);
+      window.localStorage.removeItem(projectIdKey);
       window.localStorage.removeItem("design-lab-active-research-task");
       window.localStorage.removeItem("design-lab-research-task");
       window.localStorage.removeItem("design-lab-research-evidence");
@@ -116,8 +144,14 @@ export default function NewProject() {
         if (draft.designType) setDesignType(draft.designType);
         if (draft.stage) setStage(draft.stage);
         if (typeof draft.projectName === "string") setProjectName(draft.projectName);
-        if (draft.projectMode) setProjectMode(draft.projectMode);
+        if (draft.researchMode === "visual" || draft.researchMode === "play") setResearchMode(draft.researchMode);
+        if (Array.isArray(draft.feedbackPlatforms)) setFeedbackPlatformsSelected(draft.feedbackPlatforms.filter((item: string) => feedbackPlatforms.some((platform) => platform.id === item)));
+        if (typeof draft.feedbackStartDate === "string") setFeedbackStartDate(draft.feedbackStartDate);
+        if (typeof draft.feedbackEndDate === "string") setFeedbackEndDate(draft.feedbackEndDate);
+        if (Array.isArray(draft.researchKeywords)) setResearchKeywords(draft.researchKeywords.map(String).filter(Boolean));
+        if (Array.isArray(draft.recommendedKeywords)) setRecommendedKeywords(draft.recommendedKeywords.map(String).filter(Boolean));
         if (draft.answers) setAnswers(draft.answers);
+        if (draft.customOptions) setCustomOptions(draft.customOptions);
         if (draft.customOpen) setCustomOpen(draft.customOpen);
         if (draft.customValues) setCustomValues(draft.customValues);
         if (draft.meetingContext) setMeetingContext(draft.meetingContext);
@@ -148,13 +182,20 @@ export default function NewProject() {
       stage,
       projectName,
       projectMode,
+      researchMode,
+      feedbackPlatforms: feedbackPlatformsSelected,
+      feedbackStartDate,
+      feedbackEndDate,
+      researchKeywords,
+      recommendedKeywords,
       answers,
+      customOptions,
       customOpen,
       customValues,
       meetingContext,
       decisionPosture,
     }));
-  }, [draftLoaded, designType, stage, projectName, projectMode, answers, customOpen, customValues, meetingContext, decisionPosture]);
+  }, [draftLoaded, designType, stage, projectName, researchMode, feedbackPlatformsSelected, feedbackStartDate, feedbackEndDate, researchKeywords, recommendedKeywords, answers, customOptions, customOpen, customValues, meetingContext, decisionPosture]);
 
   const canContinue = useMemo(
     () => Boolean(
@@ -167,6 +208,32 @@ export default function NewProject() {
     ),
     [projectName, answers, customValues, entryMode, solutionName, solutionImages],
   );
+  const validFeedbackRange = Boolean(feedbackStartDate && feedbackEndDate && feedbackStartDate <= feedbackEndDate);
+  const canStartFeedbackResearch = canContinue && researchKeywords.length > 0 && feedbackPlatformsSelected.length > 0 && validFeedbackRange;
+  const addResearchKeyword = (value: string) => {
+    const keyword = value.trim().replace(/[，,、;；]+$/g, "");
+    if (!keyword) return;
+    setResearchKeywords((current) => current.includes(keyword) ? current : [...current, keyword]);
+    setKeywordDraft("");
+  };
+  const recommendResearchKeywords = async () => {
+    setRecommendingKeywords(true);
+    setKeywordNotice("");
+    try {
+      const response = await fetch("/api/research/keywords", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...personalAgentHeaders() },
+        body: JSON.stringify({ projectName, designType, answers, customValues, meetingContext }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "关键词建议生成失败");
+      setRecommendedKeywords(Array.isArray(data.keywords) ? data.keywords : []);
+    } catch (error) {
+      setKeywordNotice(error instanceof Error ? error.message : "关键词建议生成失败");
+    } finally {
+      setRecommendingKeywords(false);
+    }
+  };
 
   const toggle = (key: string, option: string, single: boolean) => {
     setAnswers((current) => {
@@ -180,6 +247,28 @@ export default function NewProject() {
             : [...selected, option],
       };
     });
+  };
+
+  const saveCustomOption = (key: string, single: boolean) => {
+    const value = customValues[key]?.trim();
+    if (!value) return;
+    setCustomOptions((current) => ({
+      ...current,
+      [key]: current[key]?.includes(value) ? current[key] : [...(current[key] || []), value],
+    }));
+    setAnswers((current) => {
+      const selected = current[key] ?? [];
+      return {
+        ...current,
+        [key]: single
+          ? [value]
+          : selected.includes(value)
+            ? selected
+            : [...selected, value],
+      };
+    });
+    setCustomValues((current) => ({ ...current, [key]: "" }));
+    setCustomOpen((current) => ({ ...current, [key]: false }));
   };
 
   const summarizeMeeting = async () => {
@@ -213,9 +302,10 @@ export default function NewProject() {
   };
   const readSolutionFiles = (event: ChangeEvent<HTMLInputElement>) => { void loadSolutionFiles(Array.from(event.target.files || [])); };
 
-  const continueFlow = async (forceNewResearch = false) => {
+  const continueFlow = async (researchMode: ResearchMode, forceNewResearch = false) => {
     if (!canContinue) return;
-    const draft = { designType, stage, projectName, projectMode, answers, customOpen, customValues, meetingContext, decisionPosture };
+    setResearchMode(researchMode);
+    const draft = { designType, stage, projectName, projectMode, answers, customOpen, customValues, meetingContext, decisionPosture, researchMode, feedbackPlatforms: feedbackPlatformsSelected, feedbackStartDate, feedbackEndDate, researchKeywords };
     window.localStorage.setItem(draftKey, JSON.stringify(draft));
     if (entryMode) {
       try {
@@ -229,6 +319,11 @@ export default function NewProject() {
       return;
     }
     if (hasExistingResearch && !forceNewResearch) {
+      const taskId = window.localStorage.getItem("design-lab-active-research-task") || "";
+      if (taskId) {
+        const id = getProjectId();
+        saveCurrentProject({ id, taskId, name: projectName.trim(), kind: projectKind(designType), stage: researchMode === "visual" ? "视觉调研" : "竞品调研", progress: 40, savedAt: new Date().toISOString(), route: "/projects/research", project: draft });
+      }
       window.sessionStorage.removeItem("design-lab-start-research");
       window.location.href = "/projects/research";
       return;
@@ -243,11 +338,16 @@ export default function NewProject() {
       if (!response.ok) throw new Error("任务队列暂时不可用");
       const task = await response.json();
       window.localStorage.setItem("design-lab-active-research-task", task.id);
+      const id = getProjectId();
+      saveCurrentProject({ id, taskId: task.id, name: projectName.trim(), kind: projectKind(designType), stage: researchMode === "visual" ? "视觉调研" : "竞品调研", progress: 40, savedAt: new Date().toISOString(), route: "/projects/research", project: draft });
       window.sessionStorage.setItem("design-lab-start-research", "1");
       window.location.href = "/projects/research";
     } catch {
-      createResearchTask(draft);
-      setNotice("未连接到研究 Worker，已保存为本地研究任务");
+      const task = createResearchTask(draft);
+      window.localStorage.setItem("design-lab-active-research-task", task.id);
+      const id = getProjectId();
+      saveCurrentProject({ id, taskId: task.id, name: projectName.trim(), kind: projectKind(designType), stage: researchMode === "visual" ? "视觉调研" : "竞品调研", progress: 40, savedAt: new Date().toISOString(), route: "/projects/research", project: draft });
+      setNotice("本机调研尚未连接，任务已保存。请先完成本机调研连接后再开始采集。");
       window.sessionStorage.setItem("design-lab-start-research", "1");
       window.setTimeout(() => { window.location.href = "/projects/research"; }, 700);
     }
@@ -260,7 +360,15 @@ export default function NewProject() {
       <section className="project-form-shell">
         <header className="project-topbar">
           <div><span>新建项目</span><b>/</b><strong>项目需求</strong></div>
-          <button type="button" onClick={() => { window.location.href = "/"; }}>保存并退出</button>
+          <button type="button" onClick={() => {
+            const draft = { designType, stage, projectName, projectMode, answers, customOpen, customValues, meetingContext, decisionPosture, researchMode, feedbackPlatforms: feedbackPlatformsSelected, feedbackStartDate, feedbackEndDate, researchKeywords };
+            window.localStorage.setItem(draftKey, JSON.stringify(draft));
+            if (projectName.trim()) {
+              const id = getProjectId();
+              saveCurrentProject({ id, taskId: window.localStorage.getItem("design-lab-active-research-task") || id, name: projectName.trim(), kind: projectKind(designType), stage: "背景输入", progress: 20, savedAt: new Date().toISOString(), route: "/projects/new", project: draft });
+            }
+            window.location.href = "/";
+          }}>保存并退出</button>
         </header>
 
         <div className="project-form">
@@ -268,7 +376,7 @@ export default function NewProject() {
           <div className="form-intro">
             <p>{entryMode ? "START FROM EXISTING WORK" : "NEW PROJECT"}</p>
             <h1>{entryMode === "retrospective" ? "先补齐项目背景与上线方案。" : entryMode === "import" ? "先补齐项目背景并导入方案。" : "告诉我们你正在做什么。"}</h1>
-            <span>{entryMode ? "这些信息只需填写一次，后续识别、评价和复盘都会直接沿用。" : "使用简单选择描述项目，后续将根据这些条件提供相关案例、反馈与策略。"}</span>
+            <span>{entryMode ? "这些信息作为本需求的共同背景，后续识别、评价和复盘都会直接沿用。" : "每个项目对应一项需求；项目背景和目标将在本项目的用户调研、视觉调研、策略与评审中共同使用。"}</span>
           </div>
 
           <section className="compact-section project-name-section">
@@ -279,23 +387,7 @@ export default function NewProject() {
           {!entryMode && <section className="compact-section">
             <label>设计方向</label>
             <div className="segmented-options">
-              <button className={designType === "interaction" ? "selected" : ""} type="button" onClick={() => setDesignType("interaction")}>
-                <DesignDirectionIcon type="interaction" /><span><strong>互动设计</strong><small>玩法、流程、反馈与激励</small></span>
-              </button>
-              <button className={designType === "brand" ? "selected brand-selected" : ""} type="button" onClick={() => { setDesignType("brand"); setProjectMode("品牌新建/升级"); }}>
-                <DesignDirectionIcon type="brand" /><span><strong>品牌设计</strong><small>图标、启动屏、品牌 IP 与主视觉</small></span>
-              </button>
-              <button className={designType === "marketing" ? "selected marketing-selected" : ""} type="button" onClick={() => { setDesignType("marketing"); setProjectMode("大促设计"); }}>
-                <DesignDirectionIcon type="marketing" /><span><strong>大促设计</strong><small>大促会场、开屏广告与活动心智</small></span>
-              </button>
-            </div>
-            <div className="project-mode-under-direction">
-              <label>项目模式</label>
-              <div className="chip-row">
-                {(designType === "interaction" ? ["新互动", "已有互动优化"] : designType === "brand" ? ["品牌新建/升级", "现有品牌优化"] : ["大促设计", "现有会场/开屏优化"]).map((item) => (
-                  <button className={projectMode === item ? "active" : ""} type="button" key={item} onClick={() => setProjectMode(item)}>{item}</button>
-                ))}
-              </div>
+              {designDirections.map((direction) => <DesignDirectionCard key={direction.type} direction={direction} selected={designType === direction.type} onSelect={setDesignType} />)}
             </div>
           </section>}
 
@@ -322,7 +414,7 @@ export default function NewProject() {
 
           {(stage === "before" || Boolean(entryMode)) ? (
             <>
-              {(designType === "interaction" ? optionGroups.filter((group) => group.key !== "problem" || projectMode === "已有互动优化") : designType === "brand" ? brandOptionGroups : marketingOptionGroups).map((group) => (
+              {(designType === "interaction" ? optionGroups : designType === "brand" ? brandOptionGroups : marketingOptionGroups).map((group) => (
                 <section className="field-section" key={group.key}>
                   <div className="field-heading"><label>{group.title}</label><small>{group.single ? "单选" : "可多选"}</small></div>
                   <div className="chip-row">
@@ -336,24 +428,46 @@ export default function NewProject() {
                         {option}
                       </button>
                     ))}
+                    {(customOptions[group.key] ?? []).map((option) => (
+                      <button
+                        className={`${answers[group.key]?.includes(option) ? "active " : ""}custom-option-chip`}
+                        type="button"
+                        key={`custom-${option}`}
+                        aria-pressed={Boolean(answers[group.key]?.includes(option))}
+                        onClick={() => toggle(group.key, option, group.single)}
+                      >
+                        {option}
+                      </button>
+                    ))}
                     {group.custom && (
                       <button
-                        className={customOpen[group.key] ? "active custom-trigger" : "custom-trigger"}
+                        className="custom-trigger"
                         type="button"
-                        onClick={() => setCustomOpen((current) => ({ ...current, [group.key]: !current[group.key] }))}
+                        onClick={() => setCustomOpen((current) => ({ ...current, [group.key]: true }))}
                       >
                         ＋ 自定义
                       </button>
                     )}
                   </div>
                   {group.custom && customOpen[group.key] && (
-                    <input
-                      className="custom-input"
-                      value={customValues[group.key] ?? ""}
-                      onChange={(event) => setCustomValues((current) => ({ ...current, [group.key]: event.target.value }))}
-                      placeholder={`输入自定义${group.title}`}
-                      autoFocus
-                    />
+                    <div className="custom-input-wrap">
+                      <input
+                        className="custom-input"
+                        value={customValues[group.key] ?? ""}
+                        onChange={(event) => setCustomValues((current) => ({ ...current, [group.key]: event.target.value }))}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            saveCustomOption(group.key, group.single);
+                          }
+                          if (event.key === "Escape") setCustomOpen((current) => ({ ...current, [group.key]: false }));
+                        }}
+                        placeholder={`输入自定义${group.title}`}
+                        autoFocus
+                        aria-label={`输入自定义${group.title}，按回车保存`}
+                      />
+                      <span className="custom-input-enter-hint" aria-hidden="true">↵</span>
+                    </div>
                   )}
                 </section>
               ))}
@@ -377,29 +491,70 @@ export default function NewProject() {
           <section className="field-section decision-posture-section">
             <div className="field-heading"><label htmlFor="decision-posture">研究开放度</label></div>
             <p className="decision-posture-copy">控制研究更贴近当前需求，或探索更广泛的案例与设计机会。</p>
-            <div className="decision-posture-control">
-              <span>方向聚焦</span>
-              <div>
-                <output htmlFor="decision-posture">
-                  {decisionPosture < 40 ? "方向聚焦" : decisionPosture > 60 ? "开放探索" : "探索与聚焦并行"}
-                </output>
-                <input id="decision-posture" type="range" min="0" max="100" step="1" value={decisionPosture} onChange={(event) => setDecisionPosture(Number(event.target.value))} />
+            <div className="decision-posture-control" style={{ "--slider-value": `${decisionPosture}%` } as CSSProperties}>
+              <input id="decision-posture" type="range" min="0" max="100" step="1" value={decisionPosture} aria-valuetext={decisionPosture < 40 ? "方向聚焦" : decisionPosture > 60 ? "开放探索" : "探索与聚焦并行"} onChange={(event) => setDecisionPosture(Number(event.target.value))} />
+              <div className="decision-posture-range-labels" aria-hidden="true">
+                <span>方向聚焦</span>
+                <span>开放探索</span>
               </div>
-              <span>开放探索</span>
             </div>
           </section>
 
+          {!entryMode && stage === "before" && <section className="field-section feedback-scope-section">
+            <div className="research-keyword-block">
+              <div className="field-heading"><label htmlFor="research-keyword-input">搜索关键词</label><span>必填，用户调研只按已选关键词搜索与筛选</span></div>
+              <div className="research-keyword-entry">
+                <input id="research-keyword-input" value={keywordDraft} onChange={(event) => setKeywordDraft(event.target.value)} onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === "," || event.key === "，") { event.preventDefault(); addResearchKeyword(keywordDraft); }
+                }} onBlur={() => addResearchKeyword(keywordDraft)} placeholder="输入关键词后按回车" />
+                <button type="button" className="keyword-recommend-button" disabled={recommendingKeywords} onClick={() => { void recommendResearchKeywords(); }}><img src="/icons/star-regular.svg" width={16} height={16} alt="" aria-hidden="true" />{recommendingKeywords ? "生成中…" : "生成"}</button>
+              </div>
+              {researchKeywords.length > 0 && <div className="research-keyword-chips">{researchKeywords.map((keyword) => <button type="button" key={keyword} onClick={() => setResearchKeywords((current) => current.filter((item) => item !== keyword))}>{keyword}<span aria-hidden="true">×</span></button>)}</div>}
+              {recommendedKeywords.length > 0 && <div className="research-keyword-suggestions"><span>推荐关键词</span>{recommendedKeywords.map((keyword) => <button type="button" key={keyword} className={researchKeywords.includes(keyword) ? "added" : ""} onClick={() => addResearchKeyword(keyword)}>{keyword}{researchKeywords.includes(keyword) ? " 已添加" : " +"}</button>)}</div>}
+              {keywordNotice && <small className="research-keyword-error">{keywordNotice}</small>}
+            </div>
+            <div className="feedback-scope-divider" aria-hidden="true" />
+            <div className="field-heading"><label>用户调研采集平台</label></div>
+            <p className="meeting-context-copy">选择本次要采集的平台，并限定反馈发布时间。</p>
+            <div className="feedback-platform-options" role="group" aria-label="选择反馈平台">
+              {feedbackPlatforms.map((platform) => {
+                const selected = feedbackPlatformsSelected.includes(platform.id);
+                return <button type="button" key={platform.id} className={selected ? "selected" : ""} aria-pressed={selected} onClick={() => setFeedbackPlatformsSelected((current) => selected ? current.filter((item) => item !== platform.id) : [...current, platform.id])}>
+                  <span className="feedback-platform-check" aria-hidden="true">{selected ? "✓" : ""}</span>
+                  <span><strong>{platform.label}</strong><small>{platform.detail}</small></span>
+                </button>;
+              })}
+            </div>
+            <div className="feedback-scope-divider" aria-hidden="true" />
+            <div className="feedback-date-range">
+              <label>采集时间范围</label>
+              <div>
+                <input aria-label="反馈开始日期" type="date" value={feedbackStartDate} max={feedbackEndDate || undefined} onChange={(event) => setFeedbackStartDate(event.target.value)} />
+                <span>至</span>
+                <input aria-label="反馈结束日期" type="date" value={feedbackEndDate} min={feedbackStartDate || undefined} onChange={(event) => setFeedbackEndDate(event.target.value)} />
+              </div>
+              {feedbackStartDate && feedbackEndDate && feedbackStartDate > feedbackEndDate && <small className="feedback-range-error">开始日期不能晚于结束日期</small>}
+            </div>
+          </section>}
+
           <footer className="form-footer">
-            {!canContinue && !entryMode && <span className="form-validation-hint">
-              {!projectName.trim() ? "请先填写项目名称" : "请完成必填的项目需求"}
+            {(!canContinue || (!entryMode && !canStartFeedbackResearch)) && !entryMode && <span className="form-validation-hint">
+              {!canContinue ? (!projectName.trim() ? "请先填写项目名称" : "请完成必填的项目需求")
+                : researchKeywords.length === 0 ? "请至少选择一个搜索关键词"
+                  : feedbackPlatformsSelected.length === 0 ? "请至少选择一个反馈平台"
+                  : !validFeedbackRange ? "请设置有效的反馈时间段" : ""}
             </span>}
             <button className="secondary-button" type="button" onClick={() => { window.location.href = "/"; }}>取消</button>
-            {hasExistingResearch && <button className="secondary-button" type="button" disabled={submitting || !canContinue} onClick={() => { void continueFlow(true); }}>
-              按当前需求重新研究
-            </button>}
-            <button className="continue-button" type="button" disabled={submitting || !canContinue || (!entryMode && stage !== "before")} onClick={() => { void continueFlow(false); }}>
-              {entryMode ? "继续识别设计点" : submitting ? "正在创建研究任务…" : hasExistingResearch ? "查看已有研究" : "开始研究"} {!submitting && <img src="/arrow-right-regular.svg" alt="" />}
-            </button>
+            {entryMode ? <button className="continue-button" type="button" disabled={submitting || !canContinue} onClick={() => { void continueFlow("play"); }}>
+              继续识别设计点 {!submitting && <img src="/arrow-right-regular.svg" alt="" />}
+            </button> : <div className="research-mode-actions">
+              <button className="research-mode-button" type="button" disabled={submitting || !canStartFeedbackResearch || stage !== "before"} onClick={() => { void continueFlow("play", hasExistingResearch); }}>
+                {submitting ? "正在创建研究任务…" : "用户调研"} {!submitting && <img src="/arrow-right-regular.svg" alt="" />}
+              </button>
+              <button className="research-mode-button" type="button" disabled={submitting || !canContinue || stage !== "before"} onClick={() => { void continueFlow("visual", hasExistingResearch); }}>
+                {submitting ? "正在创建研究任务…" : "视觉研究"} {!submitting && <img src="/arrow-right-regular.svg" alt="" />}
+              </button>
+            </div>}
           </footer>
         </div>
       </section>

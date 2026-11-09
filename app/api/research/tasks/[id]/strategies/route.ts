@@ -110,7 +110,7 @@ function localEvidenceFallback(sources: Array<{ id: string; title: string; summa
       { title: "突出核心利益", action: `围绕${theme(0, "用户最关心的收益")}前置说明参与价值，并在关键入口保持一致表达。`, metric: "参与率", evidenceCandidateIds: evidenceIds, evidenceQuotes: quotes, risk: "需验证利益表达是否与真实奖励和用户预期一致。" },
       { title: "降低参与门槛", action: `围绕${theme(1, "关键流程")}缩短首次参与路径，并为关键操作提供即时反馈。`, metric: "完成率", evidenceCandidateIds: evidenceIds, evidenceQuotes: quotes, risk: "流程缩短可能减少规则解释，需要同步监测误操作。" },
     ],
-    directions: [{ title: "利益前置的轻量参与路径", summary: "先说明价值，再用短路径承接参与，并以过程指标验证每一步。", flow: ["展示核心利益", "进入参与流程", "完成关键操作", "反馈结果"], points: ["利益表达一致", "减少非必要步骤", "关键节点有反馈"], test: "对比参与率、点击率和完成率。" }],
+    directions: [{ title: "利益前置的轻量参与路径", summary: "先说明价值，再用短路径承接参与，并以过程指标验证每一步。", flow: ["展示核心利益", "进入参与流程", "完成关键操作", "反馈结果"], points: ["利益表达一致", "减少非必要步骤", "关键节点有反馈"], test: "确认关键体验可被观察后，在有限范围上线；持续关注参与、完成和异常反馈，并汇总问题推进迭代。" }],
   };
 }
 
@@ -179,7 +179,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   let fallbackReason = "";
   try {
     const response = await agent.chatCompletions({
-        messages: [{ role: "user", content: ["你是设计研究策略分析师。仅根据给定项目需求、小红书帖子摘要和用户评论提炼策略。", "必须区分事实与推断；不得虚构用户反馈、案例或效果数据。证据不足时用风险和待验证指标表达。", "策略应具体但保持通用设计层级，不照抄帖子，不提及与输入无关的品牌或具体业务。", `项目需求：${task.payload}`, projectStrategyInstruction(task.payload), `研究证据：${JSON.stringify(sources)}`].join("\n") }],
+        messages: [{ role: "user", content: ["你是设计研究策略分析师。仅根据给定项目需求、小红书帖子摘要和用户评论提炼策略。", "必须区分事实与推断；不得虚构用户反馈、案例或效果数据。证据不足时用风险和待验证指标表达。", "策略应具体但保持通用设计层级，不照抄帖子，不提及与输入无关的品牌或具体业务。", "策略 metric 请优先围绕互联网电商互动体验设计，采用参与转化率、入口点击率、任务完成率、奖励领取率、次日回访率、重复参与率、关键步骤流失率、体验反馈率等可理解指标；每项指标不超过10个汉字，避免‘关键步骤状态识别正确率’等不清晰术语。所有设计方向标题只写方向本身，不加‘优先方向’‘备选方向’‘有限探索方向’‘有限替代方向’‘替代方向’‘探索方向’等定位或优先级前缀。方向中的 flow 必须是用户可感知的连续步骤，每步使用短句；test 面向设计师，使用‘确认体验可落地’‘与产品、研发对齐关键体验’‘确认关键步骤可被观察’‘在有限范围上线观察体验’‘与当前方案对照’‘持续关注体验反馈并迭代’等表达。不要使用埋点验收、灰度发布、分流对照、账本、弱网幂等等工程或数据术语；也不要建议小样本、可点击原型或单人版本测试，除非项目需求明确要求。", `项目需求：${task.payload}`, projectStrategyInstruction(task.payload), `研究证据：${JSON.stringify(sources)}`].join("\n") }],
         tools: [strategyTool],
         tool_choice: { type: "function", function: { name: "report_design_strategy" } },
         stream: false,

@@ -1,404 +1,273 @@
-# 设计调研与评审专家 Style Guide
+# 设计调研与评审专家 — DESIGN.md
 
-> Source of truth: Figma page **Design System - 设计调研与评审专家**, August 2026.  
-> Figma file: https://www.figma.com/design/O6m0t303xLPib1N8PE7KMA/  
-> Scope: the 设计调研与评审专家 dashboard, project intake, research review, and strategy screens.
+> **Source of truth:** [Design Lab Design System in Figma](https://www.figma.com/design/c1VemCIxba0f7oZkJ9fSvT/Design-Lab-Design-System?node-id=7-3)
+>
+> **Scope:** 项目看板、项目新建、调研证据、策略、方案与后续角色评审。本文记录当前已落地的 Figma tokens、文字样式与组件；代码实现不得凭空扩充色阶或组件状态。
 
-## 1. Design direction
+## 1. Design intent
 
-设计调研与评审专家 is a calm, evidence-led workspace for designers. The interface should feel precise and editorial rather than decorative: warm neutral backgrounds, dark ink typography, restrained violet emphasis, generous whitespace, and compact controls.
+这是一个面向设计师的研究与决策工作台，而不是营销型后台。界面应安静、清晰、可追溯：证据、结论和下一步行动优先于装饰。
 
-Core principles:
+- **Warm neutral first.** 画布、面板和边框以暖灰建立层级；不使用冷蓝灰替代。
+- **White means selected.** 选中为白色表面 `surface/selected` 加深边框 `border/strong`；不能用紫色或分类色铺满选中项。
+- **Violet is punctuation.** 紫色只用于链接、AI 提示与少量强调，不能成为默认按钮或通用选中背景。
+- **Semantic before primitive.** 业务页面与组件只使用 semantic tokens；primitive 仅用于建立、维护 semantic token。
+- **Flat and structured.** 用表面、1 px 边框和留白分层；默认不使用阴影。
+- **Auto layout by default.** 组件内部相关元素必须使用 Auto Layout；padding、gap、radius 与颜色均绑定现有变量。
 
-- **Evidence first.** Content, screenshots, quotations, and decisions carry the visual hierarchy.
-- **Quiet by default.** Most surfaces use warm neutrals; strong color is reserved for action, selection, status, and categorization.
-- **Clear layers.** Canvas, sidebar, panels, cards, and sunken regions must be distinguishable without heavy shadows.
-- **Compact, not cramped.** Dense research information is supported by a consistent spacing scale and readable type hierarchy.
-- **Semantic tokens first.** Product UI must consume semantic tokens rather than primitive colors directly.
-- **One primary action per region.** Avoid competing dark or violet calls to action.
+## 2. Token architecture
 
-## 2. Token usage
+Figma 现有 collections：
 
-Use the semantic token layer in product code. Primitive tokens exist to construct or extend semantic tokens and should not be used directly in feature components unless no semantic equivalent exists.
+| Collection | Purpose |
+|---|---|
+| `Primitives / Color` | 原始色值；不直接在业务组件中使用 |
+| `Semantic / Color` | 组件和业务页面的唯一颜色入口 |
+| `Foundation / Spacing` | `space/*` 尺寸与 Auto Layout gap/padding |
+| `Foundation / Radius` | `radius/*` 圆角 |
+| Typography collection + text styles | 字号变量与最终可用文本样式；实现时以 text style 规格为准 |
 
-Recommended CSS naming:
+代码中的 token 命名与 Figma 语义保持对应。例如：
 
 ```css
---color-text-primary
---color-bg-canvas
---color-surface-primary
---color-border-default
---color-accent-primary
---space-16
---radius-card
---font-size-body
+:root {
+  --color-bg-canvas: #F7F6F5;
+  --color-surface-primary: #FFFFFF;
+  --color-surface-secondary: #F1EEEB;
+  --color-surface-selected: #E0DCD7;
+  --color-text-primary: #191715;
+  --color-text-muted: #827C76;
+  --color-border-default: #EAE6E2;
+  --color-border-strong: #E0DCD7;
+  --color-accent-primary: #6D4ABF;
+}
 ```
 
-The visible four Figma panels and their `7:*` variable collections are canonical for this guide. The file also contains unused duplicate collections under `13:*`; they are not part of this page's published visual specification and must not be mixed into implementation.
+不要在业务代码内以十六进制颜色命名变量（如 `--purple`、`--gray-200`）；应以用途命名（如 `--color-text-muted`）。
 
-## 3. Color primitives
+## 3. Color
 
-### Warm neutrals
+### 3.1 Primitive color scale
 
-Warm neutrals define the overall character of the interface. Do not replace them with cool blue-gray values.
+Primitive 色阶用于 token 维护，不直接用于页面样式。
 
-| Token | Value | Typical role |
+| Token | Value | Intended source role |
 |---|---:|---|
-| `neutral/900` | `#1A1816` | Primary ink, primary action |
-| `neutral/800` | `#302C28` | Hovered dark action |
-| `neutral/700` | `#474139` | Secondary text |
-| `neutral/600` | `#5E564E` | Supporting dark text |
-| `neutral/500` | `#766E65` | Muted text |
-| `neutral/400` | `#948C83` | Placeholder or quiet metadata |
-| `neutral/300` | `#ADA59C` | Quiet text |
-| `neutral/200` | `#C8C1B8` | Strong border |
-| `neutral/100` | `#E0DBD4` | Default border, disabled fill |
-| `neutral/75` | `#EBE7E1` | Sidebar, secondary surface |
-| `neutral/50` | `#F2EFE9` | App canvas |
-| `neutral/25` | `#F7F5F1` | Hover surface |
-| `neutral/0` | `#FDFCFA` | Panel and card surface |
+| `neutral/0` | `#FFFFFF` | 白色表面 |
+| `neutral/50` | `#F7F6F5` | 暖白画布 |
+| `neutral/75` | `#F1EEEB` | 次级表面 |
+| `neutral/100` | `#EAE6E2` | 默认边框 |
+| `neutral/200` | `#E0DCD7` | 选中表面与强调边框 |
+| `neutral/500` | `#827C76` | 弱文字 |
+| `neutral/700` | `#24211F` | 次级文字 / hover |
+| `neutral/900` | `#191715` | 主文字 / 主操作 |
+| `violet/50` | `#EEEAF6` | 浅紫预留色阶 |
+| `violet/100` | `#DDD8EF` | accent 表面 |
+| `violet/500` | `#6D4ABF` | accent 主色 |
+| `violet/700` | `#4A2A8E` | 深紫预留色阶 |
+| `orange/50` | `#FFF1E5` | 大促分类表面 |
+| `orange/500` | `#FF7800` | 大促分类主色 |
+| `green/50` | `#E9F1EB` | 成功浅色 |
+| `green/500` | `#1AA145` | 成功 |
+| `red/50` | `#FFE7E9` | 错误 / 品牌分类表面 |
+| `red/500` | `#FF0F23` | 错误 / 品牌分类主色 |
+| `pink/50` | `#FEE5F4` | 互动分类表面 |
+| `pink/500` | `#F4008E` | 互动分类主色 |
+| `amber/500` | `#EC9B00` | 警告 |
+| `blue/500` | `#177DE6` | 信息 |
 
-### Violet
+### 3.2 Semantic color roles
 
-Violet communicates selection, AI assistance, active filters, focus, and the 设计调研与评审专家 identity. It is not a general-purpose background color.
+页面和组件必须从本表选择颜色。
 
-| Token | Value |
-|---|---:|
-| `violet/900` | `#2B1456` |
-| `violet/800` | `#3A1E72` |
-| `violet/700` | `#4A2A8E` |
-| `violet/600` | `#5B38A8` |
-| `violet/500` | `#6D4ABF` |
-| `violet/400` | `#8568CA` |
-| `violet/300` | `#A08ED5` |
-| `violet/200` | `#C0B5E2` |
-| `violet/100` | `#DDD8EF` |
-| `violet/50` | `#EEEAF6` |
-
-### Orange
-
-Orange is a supporting category color for warm opportunity, reward, commerce, or brand-oriented content. It must not compete with violet as the product accent.
-
-| Token | Value |
-|---|---:|
-| `orange/700` | `#96553A` |
-| `orange/600` | `#B06D48` |
-| `orange/500` | `#C88558` |
-| `orange/400` | `#D8A47E` |
-| `orange/200` | `#E8C4A8` |
-| `orange/100` | `#F0D8C5` |
-| `orange/50` | `#F6EBE0` |
-
-### Green
-
-Green is a supporting category color for positive evidence, completion, sustainability, or retained value.
-
-| Token | Value |
-|---|---:|
-| `green/700` | `#3D6E50` |
-| `green/600` | `#508A64` |
-| `green/500` | `#6DA37E` |
-| `green/400` | `#8FB99C` |
-| `green/200` | `#B5D2BE` |
-| `green/100` | `#D4E5D8` |
-| `green/50` | `#E9F1EB` |
-
-### Status colors
-
-| Token | Value | Use |
+| Semantic token | Value | Use |
 |---|---:|---|
-| `status/error` | `#D9534F` | Failed, blocked, destructive |
-| `status/warning` | `#E5A832` | Needs attention, partial result |
-| `status/success` | `#34A853` | Completed, saved, verified |
-| `status/info` | `#4A90D9` | Informational system state |
-
-Status colors communicate state only. Never use them as decorative card palettes.
-
-## 4. Semantic colors
-
-### Text
-
-| Token | Value | Use |
-|---|---:|---|
-| `text/primary` | `#1A1816` | Headings and primary content |
-| `text/secondary` | `#474139` | Labels and supporting content |
-| `text/muted` | `#766E65` | Descriptions and metadata |
-| `text/quiet` | `#ADA59C` | Placeholder, timestamps, low-priority labels |
-| `text/inverse` | `#FDFCFA` | Text on dark surfaces |
-
-Maintain at least a one-step hierarchy between adjacent text roles. Do not use quiet text for information required to complete a task.
-
-### Backgrounds and surfaces
-
-| Token | Value | Use |
-|---|---:|---|
-| `bg/canvas` | `#F2EFE9` | Main application background |
-| `bg/panel` | `#FDFCFA` | Main panels and modal surfaces |
-| `bg/sidebar` | `#EBE7E1` | Navigation and persistent rails |
-| `bg/elevated` | `#FDFCFA` | Popovers, dialogs, floating content |
-| `bg/sunken` | `#E0DBD4` | Wells, inactive tracks, recessed regions |
-| `surface/primary` | `#FDFCFA` | Cards and form controls |
-| `surface/primary-hover` | `#EEE9E3` | Hover state for primary surfaces |
-| `surface/primary-active` | `#E0DBD4` | Pressed state for primary surfaces |
-| `surface/secondary` | `#EBE7E1` | Secondary controls and grouped areas |
-| `surface/secondary-hover` | `#E3DED7` | Hover state for secondary surfaces |
-| `surface/secondary-active` | `#D8D2CA` | Pressed or selected secondary state |
-
-Prefer borders and background separation over large shadows. Elevated surfaces may use one subtle shadow when separation cannot be achieved by color alone. Keep interaction states in their surface family: primary surfaces use `primary-hover/active`; secondary surfaces use `secondary-hover/active`.
-
-### Borders
-
-| Token | Value | Use |
-|---|---:|---|
-| `border/default` | `#E0DBD4` | Inputs, cards, dividers |
-| `border/subtle` | `#EBE7E1` | Hairlines and low-emphasis grouping |
-| `border/strong` | `#C8C1B8` | Focus-adjacent or high-contrast boundaries |
-
-Use 1 px borders. Dashed borders are reserved for upload/drop zones and empty insertion areas.
-
-### Accent and interaction
-
-| Token | Value | Use |
-|---|---:|---|
-| `accent/primary` | `#6D4ABF` | Selected states, focus, AI-related emphasis |
-| `accent/secondary` | `#6DA37E` | Supporting positive categorization |
-| `accent/surface` | `#DDD8EF` | Selected or highlighted background |
-| `accent/muted` | `#EEEAF6` | Low-emphasis accent background |
-| `interactive/primary` | `#1A1816` | Primary action background |
-| `interactive/hover` | `#302C28` | Primary action hover |
-| `interactive/disabled` | `#E0DBD4` | Disabled action background |
-
-Focus rings use `accent/primary` at reduced opacity and must remain visible against both canvas and panel backgrounds.
-
-## 5. Typography
-
-### Typeface
-
-- Primary Latin typeface: `Inter`.
-- Figma uses `Regular` for supporting text and `Medium` for hierarchy and scale specimens.
-- Chinese fallback: `PingFang SC`, then `Microsoft YaHei`, then system sans-serif.
-- Recommended stack: `Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif`.
-- Avoid Arial as the first choice because it changes the proportions established in Figma.
-
-### Size scale
-
-| Token | Size | Default role |
-|---|---:|---|
-| `size/caption` | 10 px | Eyebrows, compact metadata |
-| `size/detail` | 12 px | Secondary labels, helper text |
-| `size/body-sm` | 14 px | Dense card and table copy |
-| `size/body` | 16 px | Default readable body copy |
-| `size/subheading` | 18 px | Section subheading |
-| `size/body-lg` | 20 px | Lead text or emphasized body |
-| `size/heading-sm` | 24 px | Card-group or page-section heading |
-| `size/heading` | 32 px | Standard page title |
-| `size/heading-lg` | 36 px | Major page title |
-| `size/display-sm` | 40 px | Compact display heading |
-| `size/display` | 48 px | Display heading |
-| `size/display-lg` | 56 px | Large display heading |
-| `size/display-xl` | 64 px | Hero-only display heading |
-
-Implementation guidance:
-
-- Use `Medium` for headings, button labels, selected navigation, and important metrics.
-- Use `Regular` for paragraphs, descriptions, metadata, and form values.
-- Default body line height: 1.5–1.7 for Chinese or mixed-language content.
-- Compact labels may use 1.3–1.4 line height.
-- Page titles may use slightly negative letter spacing, but never below `-0.04em`.
-- Uppercase eyebrows may use `0.08em–0.14em` letter spacing.
-- Do not use display sizes inside operational dashboard cards.
-
-## 6. Spacing
-
-Canonical spacing scale:
-
-`2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 38, 46, 52, 64 px`
-
-Usage guidance:
-
-- `2–6`: icon offsets, inline metadata, tight internal alignment.
-- `8–12`: compact control gaps, chips, small card internals.
-- `14–20`: standard component padding and form spacing.
-- `24–32`: section padding, card groups, layout gutters.
-- `38–64`: separation between major page regions.
-- Prefer values from the scale; do not introduce arbitrary 15, 17, 22, or 30 px gaps.
-- Related controls should be closer to each other than to the next section.
-
-## 7. Radius
-
-The Figma variables contain a granular radius scale, while the visible specification highlights these canonical values:
-
-`4, 6, 8, 10, 12, 14, 16 px, full`
-
-Recommended semantic mapping:
-
-| Role | Radius |
-|---|---:|
-| Tiny tags and keyboard hints | 4 px |
-| Compact buttons and badges | 6 px |
-| Inputs and standard buttons | 8 px |
-| Upload areas and compact cards | 10 px |
-| Standard dashboard cards | 12 px |
-| Prominent action or content cards | 14 px |
-| Dialogs and major floating panels | 16 px |
-| Pills, avatars, circular controls | `9999px` |
-
-Nested elements should normally use a radius 2–4 px smaller than their parent.
-
-## 8. Layout
-
-- Desktop pages use a persistent sidebar and a centered content column.
-- Use `minmax(0, 1fr)` for flexible main regions to prevent overflow.
-- Default content width should remain readable rather than stretching across the viewport; use approximately 1030–1100 px for evidence-heavy pages and 720–800 px for forms.
-- Major page padding: 52–64 px vertically and 24–32 px horizontally.
-- Use CSS Grid for repeated cards and data columns; use Flexbox for toolbars and compact control rows.
-- Card grids collapse to one column on narrow screens.
-- On mobile, reduce persistent navigation to an icon rail or compact header, but preserve task progress and the primary action.
-
-## 9. Components
-
-The Figma page defines foundations and contains no reusable Figma component sets. The following rules are implementation conventions derived from those foundations.
-
-### Buttons
-
-- Primary: `interactive/primary` background, `text/inverse`, 8 px radius.
-- Primary hover: `interactive/hover`; do not rely only on movement or shadow.
-- Disabled: `interactive/disabled` with quiet text and no shadow.
-- Secondary: `surface/secondary` with `text/secondary`.
-- Ghost: transparent; hover uses the surface family of its containing region.
-- Standard height: 36–40 px. Compact toolbar actions: 28–32 px.
-- Use violet for selection/focus, not as the default primary-button fill.
-
-### Inputs
-
-- All text-entry controls use a visible white `surface/primary` fill and warm brown-gray `border/strong` (`neutral/200`, `#C8C1B8`). Never present an editable field as borderless text.
-- Standard single-line height: 42 px; standard radius: 8 px; horizontal padding: 12–13 px.
-- Labels sit 10–15 px above their control and use `text/secondary`, 11–12 px, semibold.
-- Placeholder uses `text/quiet`.
-- Focus retains the warm stroke and adds a 2 px `accent/primary` ring without shifting layout.
-- Textareas follow the same fill, stroke, radius, and focus treatment; minimum height is 74 px and they may grow vertically.
-- Select controls follow the same geometry as text inputs. Their chevron is secondary information and must not become the strongest element.
-- Helper text uses `size/detail` or `size/caption`, never below 10 px in production UI.
-- Validation errors retain the white fill, replace the border with `status/error`, and add a short text explanation below the control.
-
-### Upload areas
-
-- Upload areas occupy the full available row unless paired files are the explicit task.
-- Use `surface/primary`, a 1 px dashed `border/strong`, and a 10 px radius.
-- Minimum height is 72–82 px. Center the icon and two-line label vertically; keep file names readable and truncate only at the end.
-- The action that processes an uploaded file appears on the following row, centered. It is not placed as a tall block beside the drop zone.
-- After upload, show small previews and a plain-language processing state. Violet indicates active Agent processing; green indicates a completed result.
-
-### Cards and panels
-
-- Default content card: white `surface/primary`, 12 px radius, no visible stroke, and `shadow/card` only when separation from the canvas is necessary.
-- Input cards and editable design-point cards remain white. Their contained inputs carry the warm stroke; the card itself does not.
-- Selection cards use white fill in the default state. Hover changes to `surface/primary-hover`; selected state uses `accent/surface` or a violet state cue.
-- Secondary groups inside a white card use `surface/secondary` and a radius 2–4 px smaller than the parent. Do not stack several shadowed white cards.
-- Summary panels may use `surface/secondary` without a stroke. They present context and must not resemble editable inputs.
-- Selected cards retain the same structure and add an accent fill or state indicator; do not rely on opacity alone.
-- Primary evidence images preserve their aspect ratio and source context. A design-point card may show a focused crop only when the original image remains available from the same record.
-
-### Editable design-point cards
-
-- Use a white card with 16–18 px internal padding and a 12 px radius.
-- Present the Agent-cropped source image first, followed by the editable decision name and concise description.
-- Strategy and expected metrics belong to the same decision card. Strategy labels are action-oriented verbs such as “降低参与门槛”.
-- One design point may contain multiple short metric chips or fields. Each can be edited or removed; “添加指标” is a quiet secondary action.
-- Remove controls are low-emphasis until hover and must never compete with the primary workflow action.
-
-### Step progress
-
-- Use the same numbered horizontal stepper across project setup, research, solution review, and retrospective screens.
-- Active step: `interactive/primary` circle with inverse number and primary label.
-- Completed step: `accent/surface` circle with violet number plus a separate success check; connectors use `border/default`.
-- Future steps use `interactive/disabled` and quiet text. Previous steps may be clickable; future steps remain disabled until their prerequisites exist.
-
-### Progress and Agent states
-
-- Routine Agent processing uses `accent/primary` for both percentage text and the filled progress track.
-- The empty progress track uses `interactive/disabled`.
-- Status colors are reserved for exceptions or outcomes: green for completed, orange for attention or login, red for failed. Do not use blue for the normal running state.
-
-### Navigation
-
-- Sidebar uses `bg/sidebar`.
-- Default items use `text/muted`; active items use `text/primary` and `surface/secondary-active` or `accent/surface`.
-- Navigation hover uses `surface/secondary-hover`.
-- Navigation labels should use 12–14 px type; do not use tiny metadata sizes for primary navigation.
-
-### Chips and tags
-
-- Chips use 4–6 px radius and 10–12 px text.
-- Neutral chips use `surface/secondary`.
-- Selected chips use `accent/surface` with violet text derived from `violet/700`.
-- Orange, green, blue, and status colors communicate categories or states, not arbitrary decoration.
-
-### Tables and research lists
-
-- Headers use muted text on `surface/secondary`.
-- Rows use `surface/primary` with `border/subtle` dividers.
-- Row hover uses `surface/primary-hover`.
-- Keep actions aligned consistently at the end of each row.
-- Dense data may use `size/body-sm`; critical values should not be smaller than 12 px.
-
-### Dialogs and feedback
-
-- Dialogs use `bg/elevated`, 16 px radius, and a restrained shadow.
-- Toasts use `interactive/primary` with inverse text.
-- Error, warning, success, and info messages must pair color with a label or icon.
-- Loading states should preserve layout to avoid page jumps.
-
-## 10. Interaction and motion
-
-- Use 150–200 ms transitions for hover, focus, and selection.
-- Motion should confirm state change, not decorate routine navigation.
-- Avoid scale effects on dense cards; a small elevation or background change is sufficient.
-- Respect `prefers-reduced-motion`.
-- Never disable page animation temporarily during screenshots or Agent observation; wait for visual stability instead.
-
-## 11. Accessibility
-
-- Body and operational text should meet WCAG AA contrast.
-- Do not place quiet text on `bg/sunken` for required information.
-- All controls need keyboard focus states.
-- Icon-only buttons require accessible labels.
-- Touch targets should be at least 40 × 40 px on touch-oriented layouts.
-- Color must not be the only indicator for selection, status, or validation.
-- Preserve source links and evidence context wherever screenshots or quotations are shown.
-
-## 12. Content style
-
-- Prefer concise Chinese labels and sentence-case English.
-- Button labels describe the immediate action: “提炼要点”, “生成策略”, “保存”.
-- Avoid anthropomorphic Agent wording unless the distinction is useful to the user.
-- Helper text explains consequence or required input, not the obvious control label.
-- Empty states should state what is missing and the next available action.
-
-## 13. Migration notes for the current dashboard
-
-The existing `app/globals.css` still uses a cool-gray palette such as `#F4F6F7`, `#E7EBED`, and `#25282A`, and places Arial before the Chinese/system stack. New work should use the Figma tokens above. Existing screens should migrate incrementally:
-
-1. Replace root variables with semantic warm-neutral tokens.
-2. Change the primary font stack to Inter with Chinese fallbacks.
-3. Map canvas, sidebar, panels, text, borders, and actions to semantic variables.
-4. Replace hardcoded violet, orange, and green values with primitive or semantic tokens.
-5. Normalize spacing and radii to the canonical scales.
-6. Increase any required operational text currently below 10 px.
-
-Do not mix the old cool-gray and new warm-neutral foundations within the same screen.
-
-## 14. Review checklist
-
-Before considering a 设计调研与评审专家 screen complete, verify:
-
-- Semantic tokens are used instead of hardcoded primitive colors.
-- Warm-neutral canvas, sidebar, and panel hierarchy is visible.
-- Violet is reserved for selection, focus, AI, and brand emphasis.
-- Only one primary action dominates each section.
-- Typography follows the scale and required information is at least 10 px.
-- Spacing and radius values come from the documented scales.
-- Cards, inputs, and buttons have complete hover, focus, active, and disabled states.
-- Evidence images are uncropped and source context remains visible.
-- Layout works at desktop and narrow breakpoints.
-- Keyboard focus, contrast, labels, and non-color state cues have been checked.
+| `bg/canvas` | `#F7F6F5` | 应用与页面背景 |
+| `bg/panel` / `surface/primary` | `#FFFFFF` | 卡片、表单、内容面板 |
+| `bg/sidebar` / `surface/secondary` | `#F1EEEB` | 侧栏、次级容器 |
+| `surface/hover` | `#EAE6E2` | 唯一的中性 hover 表面 |
+| `surface/selected` | `#E0DCD7` | 中性选中表面，如已选 chip |
+| `text/primary` | `#191715` | 标题、正文、关键数值 |
+| `text/secondary` | `#24211F` | 次级信息 |
+| `text/muted` / `text/tertiary` | `#827C76` | 标签、提示、辅助说明 |
+| `text/inverse` | `#FFFFFF` | 深色操作中的文字 |
+| `border/default` | `#EAE6E2` | 默认边界与分隔线 |
+| `border/strong` | `#E0DCD7` | 需要强调的边界 |
+| `interactive/primary` | `#191715` | Primary Button 背景 |
+| `interactive/hover` | `#24211F` | 深色操作 hover |
+| `interactive/disabled` | `#EAE6E2` | 禁用操作表面 |
+| `accent/primary` | `#6D4ABF` | 链接、AI 结果、有限强调 |
+| `accent/surface` | `#DDD8EF` | accent 的浅表面 |
+| `status/success` | `#1AA145` | 完成、成功通知 |
+| `status/warning` | `#EC9B00` | 风险、待注意状态 |
+| `status/error` | `#FF0F23` | 失败、错误通知 |
+| `status/info` | `#177DE6` | 信息提示 |
+
+### 3.3 Direction category colors
+
+分类色只用于设计方向识别、Direction Card 图标容器或同一语义的标记；不取代通用交互和选中状态。
+
+| Direction | Main token | Surface token | Main value | Surface value |
+|---|---|---|---:|---:|
+| 互动设计 | `category/interaction` | `category/interaction-surface` | `#F4008E` | `#FEE5F4` |
+| 大促设计 | `category/marketing` | `category/marketing-surface` | `#FF7800` | `#FFF1E5` |
+| 品牌设计 | `category/brand` | `category/brand-surface` | `#FF0F23` | `#FFE7E9` |
+
+设计方向的产品顺序固定为：**互动设计 → 大促设计 → 品牌设计**。
+
+## 4. Typography
+
+### 4.1 Typeface and rules
+
+- Font family: **PingFang SC**。
+- 所有文本优先绑定对应 Figma text style，而非页面内手填字号。
+- 字重仅在当前 styles 中使用 `Regular` 与 `Medium`；不要人为新增 Semibold/Bold 层级。
+- 中文、英文与数字均使用同一字体栈，避免混用展示字体。
+
+### 4.2 Type scale
+
+| Figma text style | Weight | Size / line height | Typical use |
+|---|---|---:|---|
+| `Display` | Medium | `48 / 48` | 极少量仪表盘主展示数值或空状态主标题 |
+| `Heading/Page` | Medium | `32 / 32` | 页面标题 |
+| `Heading/Section` | Medium | `24 / 24` | 区块标题 |
+| `Heading/Card` | Medium | `16 / 20` | 通用 Card 标题、步骤标题 |
+| `Body/Default` | Regular | `16 / 22` | 正文、输入内容、主要说明 |
+| `Body/Compact` | Regular | `14 / 20` | 次级正文、列表辅助信息 |
+| `Label` | Medium | `14 / 14` | 按钮、标签、表单字段名 |
+| `Caption` | Regular | `12 / 12` | 时间、来源、极短辅助信息 |
+
+排版层级按“页面 → 区块 → 卡片 → 正文 → 辅助信息”收敛。正文默认使用 `Body/Default`；只有信息密度确有需要时才降为 `Body/Compact`。不以小字和浅色同时承载关键结论。
+
+## 5. Layout, spacing and shape
+
+### 5.1 Spacing scale
+
+`space/2`, `space/4`, `space/6`, `space/8`, `space/10`, `space/12`, `space/16`, `space/20`, `space/24`, `space/32`, `space/40`, `space/48`, `space/64`。
+
+建议用法：
+
+| Token | Preferred use |
+|---|---|
+| `2–6` | 图标与微型文字的细微调整；不作为卡片主 padding |
+| `8–12` | 紧凑控件内部 gap、chip、输入框 |
+| `16–20` | 按钮、卡片内部内容、表单字段组 |
+| `24–32` | 卡片区块、同级内容组 |
+| `40–64` | 页面区块之间、空状态与大容器 |
+
+### 5.2 Radius scale
+
+`radius/4`, `radius/6`, `radius/8`, `radius/10`, `radius/12`, `radius/16`。
+
+保持克制：紧凑控件优先 `6–8`；普通输入、按钮与卡片使用 `10–12`；大容器才使用 `16`。不要在同一组件内混用多个圆角值。
+
+### 5.3 Auto Layout rules
+
+- 组件根节点必须为 Auto Layout frame；水平或垂直方向由内容关系决定。
+- 固定高度只用于触控目标、进度轨道等明确规格；文字容器应可随内容增长。
+- 内部 padding 与 item gap 必须选用 `space/*`，圆角选用 `radius/*`。
+- 文本用 Hug contents；可拉伸的输入与卡片内容区用 Fill container；图标保持 Fixed。
+- 组件实例不得通过手动挪动子图层来修正间距。若内容密度需要变化，应新增受控 variant 或调整 Auto Layout token。
+
+## 6. Iconography
+
+- 唯一图标来源：**Strange Icons → Nightingale → Regular**。
+- 视觉尺寸只使用 **16 / 20 / 24 px**。
+- Icon Button 的最小交互目标为 **40 × 40 px**；图标本身不因目标变大而放大。
+- 图标颜色继承语义：默认 `text/secondary`，选中或强调视情况使用 `accent/primary`，破坏性操作使用 `status/error`。
+- 使用导入的 SVG / 已建 icon component；不要用 emoji、Unicode 符号或其它线宽风格代替。
+
+### Context icon assignment
+
+| Context | Icon | Size | Rule |
+|---|---|---:|---|
+| 具体项目（侧栏、项目列表） | `File / Regular` | `18 / 20 px` | 所有项目统一使用 File，不以首字母、文件夹或分类色替代 |
+| 我的任务 | `Calendar Check / Regular` | `20 px` | 表达可执行且有时间属性的待办 |
+
+这两个 SVG 作为产品内已批准的 Nightingale Regular 图标实例，使用 `currentColor` 继承语义文字颜色。
+
+## 7. Current component inventory
+
+下表是当前 Figma Components 页面已存在的 component sets 与可用 variants。实现时不得假定未列出的状态已经设计完成。
+
+| Component | Available variants | Product use |
+|---|---|---|
+| `Button` | `Primary / Default`, `Secondary / Default`, `Ghost / Default`, `Primary / Disabled` | 明确提交、次级操作、低优先级操作 |
+| `Chip` | `Default`, `Selected`, `Custom` | 单选活动节点、筛选与可自定义项 |
+| `Label` | `Default`（互动）、`State2`（大促）、`State3`（品牌） | 用分类色识别项目方向，不表示选中状态 |
+| `Dropdown / 下拉菜单` | 收起、触发器悬停、展开、选项悬停、已选择 | 从有限选项中单选，例如项目阶段 |
+| `TextField` | `Default`, `Focus`, `Error`, `Disabled` | 项目名称、文本输入；44px 高、8px 圆角、水平内边距 12px，输入内容使用 `14 / 20`，字段标签使用 `12 / 16`、与输入框间距 8px |
+| `Card` | `Default`, `Selected` | 通用内容卡片、方案或证据选择；12px 圆角、20px padding、12px 内容 gap |
+| `DirectionCard` | `Interaction / Marketing / Brand` × `Default / Hover / Selected` | 项目方向选择 |
+| `NavigationItem` | `Default`, `Active` | 左侧或局部导航 |
+| `Step` | `Future`, `Active`, `Complete` | 项目创建流程与进度 |
+| `Notice` | `Information`, `Success`, `Warning`, `Error` | 系统提示与任务反馈 |
+| `IconButton` | `Default`, `Selected`, `Destructive`, `Disabled` | 图标级操作 |
+| `ProjectMode` | `New project`, `Project iteration` | 项目模式选择 |
+| `ProgressBar` | `Queued`, `Running`, `Complete`, `Failed` | 调研、分析与生成任务进度 |
+| `EvidenceCard` | `Default`, `Selected` | 调研证据浏览与采纳 |
+
+### Component use rules
+
+- `TextField/Default` 使用 `surface/primary` 与 `border/default`；Focus 使用 `border/strong`，Disabled 使用 `interactive/disabled`，placeholder 使用 `text/muted`。Error 使用 `status/error` 辅助文案。
+- `Card/Default` 使用 `surface/secondary`；`Card` / `EvidenceCard` 的 selected variant 以白色表面和 `border/strong` 表达；不要改成紫色实底。选中状态还须保留勾选、单选标记等非颜色线索。
+- `Chip/Selected` 仅表示当前选择。活动节点是单选，选择一个即取消其它选项。
+- `Chip/Custom` 用于“自定义”活动节点，输入值仍应通过相邻的明确表单控件收集。
+- `DirectionCard` 使用既有分类色做识别；选中仍遵循白色表面原则。
+- `Label` 使用对应 `category/*` 文字色与浅色表面、胶囊圆角；Figma 标准规格为 14px Medium。项目列表等高密度区域可使用 **12 / 16 px** 的紧凑规格，保持可读性与分类色语义；这是看板实现中的场景扩展，尚未新增为 Figma variant。
+- `Dropdown` 的菜单使用 `surface/primary`、`border/default`、12px 圆角、6px 内边距和 2px 选项间距；选项高 40px、水平内边距 12px、8px 圆角，使用 `Body/Compact`。悬停或键盘聚焦用 `surface/hover`；已选项用勾选图标辅助识别，不以紫色铺底。支持键盘切换、Escape 关闭及点击外部关闭。
+- 项目列表的阶段触发器为紧凑文字样式，菜单复用上述 Dropdown 结构；选项修改后保存至本地项目记录。
+- 主页“新建项目”“最近项目”采用 **20 / 24 px Medium** 的紧凑区块标题；属于页面场景扩展，Figma 原有 `Heading/Section` 仍为 24 / 24。快捷入口的说明与箭头同一水平行居中对齐，箭头使用 16px 图标。
+- Primary Button 每个局部操作区通常只有一个；紫色不作为 Primary Button 的默认底色。
+- 未设计的 hover、loading、read-only 或复杂组合状态，先使用当前已有 variant 能表达的状态；需要新增时，先补齐 Figma component set 和 token bindings。
+
+## 8. Product conventions
+
+### 8.1 Project creation
+
+- 设计方向顺序：**互动设计、 大促设计、品牌设计**。
+- 项目模式：**新项目**、**项目迭代**。
+- 活动节点（单选）：**618、双11、年货节、跨年、中秋节、端午节、圣诞节、七夕、情人节、自定义**。
+- 创建流程使用 `Step`；字段输入使用 `TextField`；选择项使用 `DirectionCard`、`ProjectMode` 与 `Chip`。
+
+### 8.2 Dashboard information hierarchy
+
+1. 当前项目及状态
+2. 调研证据与可追溯来源
+3. 策略结论
+4. 方案及现有评分
+5. 后续角色评审、追问与总结
+
+项目、调研、策略与方案由主看板承载；后续角色评审读取同一项目与方案上下文。现有方案评分保留，待角色评审接入后再有意识地整合为统一体系。
+
+### 8.3 Evidence and feedback
+
+- 单条证据用 `EvidenceCard`；采纳状态只能使用 `Selected` variant。
+- 来源、时间、可信度等低优先级元信息用 `Caption` 或 `Body/Compact`，但不得弱化关键结论。
+- 异步状态通过 `ProgressBar` 和 `Notice` 表达：排队、执行、完成、失败必须可区分。
+- 破坏性或不可逆操作使用 `IconButton/Destructive` 或错误语义，并给出清晰文案。
+
+## 9. Do / don't
+
+| Do | Don't |
+|---|---|
+| 以 `surface/selected` + `border/strong` 表达选中 | 用紫色大面积铺底表达通用选中 |
+| 在组件和页面中绑定 semantic tokens | 直接填 primitive 色值或任意 hex 值 |
+| 用 PingFang SC 的既有 text styles | 临时添加独立字号、字重、行高 |
+| 用 16/20/24 px Nightingale Regular SVG | 混入 emoji、字符图标或不同线宽图标 |
+| 用 Auto Layout 与 spacing/radius tokens 调整布局 | 手动拖移子图层“对齐”组件 |
+| 先复用当前 variant，再设计缺失状态 | 在代码里臆造 Figma 未定义的状态 |
+| 让分类色仅承担方向识别 | 让分类色替代通用交互或状态颜色 |
+
+## 10. Implementation handoff checklist
+
+- [ ] 页面背景为 `bg/canvas`，内容卡片为 `surface/primary`。
+- [ ] 所有选中卡片和 chip 使用 `surface/selected` 或对应分类 selected variant，且有 `border/strong` 或对应现有 variant。
+- [ ] 所有颜色、间距、圆角、字体均可映射到 Figma token 或 text style。
+- [ ] 项目方向、项目模式和活动节点名称及顺序符合第 8.1 节。
+- [ ] 图标只来自 Nightingale Regular，并遵守 16 / 20 / 24 px 尺寸。
+- [ ] 提交前检查：没有新增未审批的色阶、字体层级、阴影或组件状态。
+
+---
+
+本文的“颜色 → 字体 → 间距与形状 → 组件 → 使用规则”结构参考了 [Refero 的 token 化设计系统文档组织方式](https://styles.refero.design/style/a73148b9-449b-42cd-9f38-86ef694f500e)；所有具体视觉值与组件范围均以 Design Lab 当前 Figma 文件为准。

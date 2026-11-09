@@ -15,24 +15,27 @@ const workerPairToken = process.env.WORKER_PAIR_TOKEN || "";
 const pollMs = Number(process.env.RESEARCH_POLL_MS || 5000);
 const maxQueries = Number(process.env.RESEARCH_MAX_QUERIES || 3);
 const maxCandidates = Number(process.env.RESEARCH_MAX_CANDIDATES || 9);
-const maxPerQuery = Number(process.env.RESEARCH_MAX_CANDIDATES_PER_QUERY || 3);
 const actionDelayMs = Number(process.env.RESEARCH_ACTION_DELAY_MS || 800);
 const visualDetailsPerTrend = Number(process.env.RESEARCH_VISUAL_DETAILS_PER_TREND || 10);
 const visualDetailsPerPlatform = 40;
 const visualSamplesPerTrend = 10;
+const visualCardsPerSearch = 30;
+// Visual competitor research is deliberately bounded separately from the number
+// of retained cases: inspect up to ten details for each named competitor, then
+// retain at most five distinct, evidence-bearing screenshots.
+const visualCompetitorDetailsPerQuery = Number(process.env.RESEARCH_VISUAL_COMPETITOR_DETAILS_PER_QUERY || 10);
 
 const visualPlatformSpecs = {
   behance: { selector: "a[href*='/gallery/']", detailPath: "/gallery/", search: (query) => `https://www.behance.net/search/projects?search=${encodeURIComponent(query)}` },
   pinterest: { selector: "a[href*='/pin/']", detailPath: "/pin/", search: (query) => `https://www.pinterest.com/search/pins/?q=${encodeURIComponent(query)}` },
   huaban: { selector: "a[href*='/pins/']", detailPath: "/pins/", search: (query) => `https://huaban.com/search?q=${encodeURIComponent(query)}` },
   dribbble: { selector: "a[href*='/shots/']", detailPath: "/shots/", search: (query) => `https://dribbble.com/search/${encodeURIComponent(query)}` },
-  zcool: { selector: "a[href*='/work/']", detailPath: "/work/", search: (query) => `https://www.zcool.com.cn/search/content?word=${encodeURIComponent(query)}` },
 };
 
 function visualPlatformsFor(project) {
   return project?.designType === "interaction"
-    ? ["behance", "pinterest", "zcool"]
-    : ["pinterest", "behance", "zcool"];
+    ? ["behance", "pinterest"]
+    : ["pinterest", "behance"];
 }
 
 const officialTrendSources = [
@@ -59,19 +62,14 @@ function researchSourcesFor(project) {
   return [];
 }
 
-const visualTrendCandidates = [
-  { key: "tactile_dimension", label: "触感材质与半透明立体", queries: ["tactile translucent 3D", "glossy rounded forms"], reports: ["Pinterest Predicts", "Canva Design Trends", "Adobe Creative Trends"] },
-  { key: "imperfect_analog", label: "非完美手作与颗粒拼贴", queries: ["analog grain collage", "handmade editorial texture"], reports: ["Canva Design Trends", "Adobe Creative Trends"] },
-  { key: "retro_tech", label: "复古科技与故障界面", queries: ["retro tech interface", "pixel glitch graphics"], reports: ["Pinterest Predicts", "Canva Design Trends"] },
-  { key: "surreal_reality", label: "超现实错位与梦境合成", queries: ["surreal dream composite", "reality scale distortion"], reports: ["Pinterest Predicts", "Canva Design Trends", "Adobe Creative Trends"] },
-];
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 class LoginRequiredError extends Error {
-  constructor(url) {
-    super("小红书需要完成登录或安全验证");
-    this.url = url;
+  constructor(platformOrUrl, url) {
+    const platform = url ? platformOrUrl : "小红书";
+    super(`${platform}需要完成登录或安全验证`);
+    this.platform = platform;
+    this.url = url || platformOrUrl;
   }
 }
 
@@ -139,49 +137,14 @@ function projectWords(project) {
 }
 
 function buildQueries(project) {
-  const words = projectWords(project);
-  const brand = project?.projectName || words[0] || "品牌";
-  if (project?.designType === "brand") {
-    const boundary = (project?.answers?.boundary || ["启动图标", "启动屏", "App内界面"]).slice(0, 3);
-    return [...new Set(boundary.map((carrier) => `京东 ${carrier} 用户反馈`))].slice(0, maxQueries);
-  }
-  if (project?.designType === "marketing") {
-    const boundary = (project?.answers?.boundary || ["大促会场"]).slice(0, 2);
-    const campaign = project?.answers?.campaign?.[0] || "大促";
-    return [...new Set(boundary.flatMap((carrier) => [`${campaign} ${carrier}`, `${carrier} 视觉设计`, `${carrier} 用户体验`]))].slice(0, maxQueries);
-  }
-  const mechanics = words.filter((word) => /养成|收集|集卡|抽奖|答题|任务|互动|游戏/.test(word));
-  const goals = words.filter((word) => /促活|传播|转化|留存|分享|完成/.test(word));
-  const meetingHint = Array.isArray(project?.meetingContext?.keyPoints) && project.meetingContext.keyPoints.length
-    ? project.meetingContext.keyPoints[0]
-    : String(project?.meetingContext?.extractedText || "")
-      .split(/[。！？；\n]/).map((value) => value.trim()).find((value) => value.length >= 2 && value.length <= 28);
-  const posture = Number(project?.decisionPosture ?? 50);
-  const focused = [
-    meetingHint ? `${brand} ${meetingHint}` : "",
-    mechanics[0] ? `${brand} ${mechanics[0]} 玩法` : "",
-    goals[0] ? `${brand} ${goals[0]} 活动` : "",
-    `${brand} 互动活动`,
-  ];
-  const exploratory = [
-    mechanics[0] ? `${mechanics[0]} 品牌活动` : "",
-    goals[0] ? `${goals[0]} 互动玩法` : "",
-    `${brand} 营销游戏`,
-    `${brand} 互动活动`,
-  ];
-  const balanced = [
-    meetingHint ? `${brand} ${meetingHint}` : "",
-    `${brand} 互动活动`,
-    mechanics[0] ? `${brand} ${mechanics[0]} 玩法` : "",
-    goals[0] ? `${brand} ${goals[0]} 活动` : "",
-    `${brand} 营销游戏`,
-  ];
-  const ordered = posture < 40 ? focused : posture > 60 ? exploratory : balanced;
-  return [...new Set(ordered.filter(Boolean))].slice(0, maxQueries);
+  const supplied = Array.isArray(project?.researchKeywords)
+    ? project.researchKeywords.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  // A project represents one demand; collect only from explicitly selected research keywords.
+  return [...new Set(supplied)].slice(0, maxQueries);
 }
 
 function buildCompetitorDiscoveryQueries(project) {
-  const words = projectWords(project);
   if (project?.designType === "brand") {
     const boundary = project?.answers?.boundary?.[0] || "数字品牌";
     return [`${boundary} 竞品`, `${boundary} 同类App`, `${boundary} 品牌案例`].slice(0, maxQueries);
@@ -190,13 +153,220 @@ function buildCompetitorDiscoveryQueries(project) {
     const boundary = project?.answers?.boundary?.[0] || "大促会场";
     return [`${boundary} 竞品`, `${boundary} 同类活动`, `${boundary} 营销案例`].slice(0, maxQueries);
   }
-  const mechanics = words.filter((word) => /养成|收集|集卡|抽奖|答题|任务|闯关|合成|互动|游戏/.test(word));
-  const primary = mechanics[0] || "互动游戏";
-  return [...new Set([
-    `${primary} 竞品`,
-    `${primary} 同类产品`,
-    `${primary} 品牌互动案例`,
-  ])].slice(0, maxQueries);
+  // Visual competitor discovery must be grounded in the explicit game type
+  // selected in the project form; project name and meeting notes are unrelated.
+  const selectedType = project?.answers?.game?.[0] || project?.customValues?.game || "互动";
+  const primary = String(selectedType).replace(/（.*?）/g, "").replace(/游戏$/g, "").trim() || "互动";
+  // First find the named competitors from one category-level search only.
+  // Subsequent searches are deliberately the competitor names themselves.
+  return [`${primary} 竞品`];
+}
+
+async function collectRightPanelRecommendations(page, { captureScreenshot = true } = {}) {
+  const viewportWidth = await page.evaluate(() => innerWidth).catch(() => page.viewportSize()?.width || 1280);
+  const frames = page.frames();
+  const frameResults = await Promise.all(frames.map(async (frame) => {
+    const isMainFrame = frame === page.mainFrame();
+    let panelLeft = viewportWidth * 0.62;
+    if (!isMainFrame) {
+      const frameBox = await frame.frameElement().then((element) => element.boundingBox()).catch(() => null);
+      if (!frameBox || frameBox.x < viewportWidth * 0.58) return null;
+      // A child frame is already a separately laid out surface; the parent
+      // geometry confirms it sits in the right panel, so inspect its full width.
+      panelLeft = 0;
+    }
+    return frame.locator("body").evaluate((body, panelLeft) => {
+    const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const candidates = [];
+    const panelLines = [];
+    const elements = [];
+    const collectDeepElements = (root) => {
+      for (const element of root.querySelectorAll("*")) {
+        elements.push(element);
+        if (element.shadowRoot) collectDeepElements(element.shadowRoot);
+      }
+    };
+    const parentAcrossShadow = (element) => element.parentElement || element.getRootNode()?.host || null;
+    collectDeepElements(body);
+    for (const element of elements) {
+      const rect = element.getBoundingClientRect();
+      const text = clean(element.innerText || element.textContent);
+      if (rect.width < 12 || rect.height < 10 || rect.right < panelLeft || rect.left > innerWidth) continue;
+      if (rect.bottom < 0 || rect.top > innerHeight || !text || text.length > 1200) continue;
+      if (text.length <= 1200 && rect.width > 24) panelLines.push({ text, y: Math.round(rect.top), x: Math.round(rect.left) });
+      if (text.length > 48) continue;
+      const style = getComputedStyle(element);
+      const isBlue = [style.color, style.webkitTextFillColor].some((colorText) => {
+        const color = colorText.match(/\d+/g)?.map(Number) || [];
+        return color.length >= 3 && color[2] > color[0] + 12 && color[2] > color[1] + 4;
+      });
+      const parent = parentAcrossShadow(element);
+      const parentText = clean(parent?.innerText || parent?.textContent).slice(0, 220);
+      const hasCompetitorLabelStructure = Boolean(element.closest("li, [role='listitem']"))
+        || (parentText.toLowerCase().startsWith(text.toLowerCase()) && /^[：:]/.test(parentText.slice(text.length).trimStart()));
+      const isNamedElement = element.matches("a[href], [role='link'], [class*='title'], [class*='name']")
+        || (element.matches("strong, b, h1, h2, h3, h4") && hasCompetitorLabelStructure);
+      if (!isBlue && !isNamedElement) continue;
+      const name = text.replace(/[º°⁰¹²³⁴⁵⁶⁷⁸⁹]+$/g, "").trim();
+      if (name.length < 2) continue;
+      candidates.push({
+        name,
+        url: element.href || element.closest("a[href]")?.href || "",
+        context: parentText,
+        blue: isBlue,
+        fromRecommendationTitle: isNamedElement,
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+      });
+    }
+    // Some Xiaohongshu AI layouts expose recommendation rows without links or
+    // semantic title tags. When a percentage badge exists, use it to recover
+    // the first visible short text line in that row.
+    for (const marker of elements) {
+      const markerRect = marker.getBoundingClientRect();
+      const markerText = clean(marker.innerText || marker.textContent);
+      if (markerRect.left < panelLeft || markerRect.right > innerWidth || markerRect.bottom < 0 || markerRect.top > innerHeight) continue;
+      if (!/\d{1,3}%\s*人推荐/.test(markerText) || markerText.length > 180) continue;
+      let card = marker;
+      for (let depth = 0; depth < 8 && parentAcrossShadow(card); depth += 1) {
+        const text = clean(card.innerText || card.textContent);
+        if (text.length > 180) break;
+        if (text.length >= 24 && /\d{1,3}%\s*人推荐/.test(text)) break;
+        card = parentAcrossShadow(card);
+      }
+      const cardRect = card.getBoundingClientRect();
+      const cardText = clean(card.innerText || card.textContent);
+      if (cardRect.left < panelLeft || cardText.length > 220) continue;
+      const percentageTop = markerRect.top;
+      const nameElement = [card, ...card.querySelectorAll("*")]
+        .map((element) => ({ element, rect: element.getBoundingClientRect(), text: clean(element.innerText || element.textContent) }))
+        .filter(({ rect, text }) => rect.width > 8 && rect.height > 8 && rect.left >= panelLeft && rect.right <= innerWidth && rect.bottom > 0 && rect.top < innerHeight && text.length >= 2 && text.length <= 48 && !/\d{1,3}%|人推荐|推荐$/.test(text))
+        .sort((a, b) => Math.abs(a.rect.top - percentageTop) - Math.abs(b.rect.top - percentageTop) || a.rect.top - b.rect.top || a.rect.left - b.rect.left)[0];
+      if (!nameElement) continue;
+      const name = nameElement.text.replace(/[º°⁰¹²³⁴⁵⁶⁷⁸⁹]+$/g, "").trim();
+      if (name.length < 2) continue;
+      candidates.push({ name, url: nameElement.element.href || nameElement.element.closest("a[href]")?.href || "", context: cardText, blue: false, fromRecommendationCard: true, x: Math.round(nameElement.rect.left), y: Math.round(nameElement.rect.top) });
+    }
+    const unique = new Map();
+    for (const item of candidates.sort((a, b) => Number(b.blue) - Number(a.blue) || Number(b.fromRecommendationCard) - Number(a.fromRecommendationCard) || a.y - b.y || a.x - b.x)) {
+      if (/^(更多|展开|收起|搜索|查看|详情|小红书|笔记|用户|点点(?:\s*ai)?|问点点|ai)$/i.test(item.name)) continue;
+      if (!unique.has(item.name.toLowerCase())) unique.set(item.name.toLowerCase(), item);
+    }
+    const orderedBlocks = [...new Map(panelLines.sort((a, b) => a.y - b.y || a.x - b.x).map(({ text }) => [text, text])).values()];
+    const lines = [];
+    for (const text of orderedBlocks) {
+      if (lines.some((existing) => existing.includes(text))) continue;
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        if (text.includes(lines[index])) lines.splice(index, 1);
+      }
+      lines.push(text);
+    }
+    return { recommendations: [...unique.values()].slice(0, 30), text: lines.slice(0, 120).join("\n").slice(0, 12000) };
+    }, panelLeft).catch(() => null);
+  }));
+  const recommendations = frameResults.flatMap((result) => result?.recommendations || []);
+  const unique = new Map();
+  for (const item of recommendations) {
+    const key = item.name.toLowerCase();
+    const existing = unique.get(key);
+    if (!existing || Number(item.blue || item.fromRecommendationCard) > Number(existing.blue || existing.fromRecommendationCard)) unique.set(key, item);
+  }
+  const text = frameResults.map((result) => result?.text || "").filter(Boolean).join("\n").slice(0, 12000);
+  let screenshotBase64 = "";
+  if (captureScreenshot) {
+    const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight })).catch(() => ({ width: viewportWidth, height: page.viewportSize()?.height || 900 }));
+    const left = Math.max(0, Math.min(viewport.width - 1, Math.floor(viewport.width * 0.60)));
+    const screenshot = await page.screenshot({
+      type: "jpeg", quality: 72, animations: "disabled",
+      clip: { x: left, y: 0, width: Math.max(1, viewport.width - left), height: Math.max(1, viewport.height) },
+    }).catch(() => null);
+    if (screenshot) screenshotBase64 = screenshot.toString("base64");
+  }
+  return {
+    recommendations: [...unique.values()].slice(0, 30),
+    text,
+    screenshotBase64,
+  };
+}
+
+async function collectDynamicRightPanel(page) {
+  const startedAt = Date.now();
+  const minWaitMs = Number(process.env.RESEARCH_COMPETITOR_PANEL_MIN_WAIT_MS || 5500);
+  const maxWaitMs = Number(process.env.RESEARCH_COMPETITOR_PANEL_MAX_WAIT_MS || 22000);
+  let previousText = "";
+  let stableReads = 0;
+  for (let attempt = 0; attempt < 28; attempt += 1) {
+    const current = await collectRightPanelRecommendations(page, { captureScreenshot: false }).catch(() => ({ text: "" }));
+    const nextText = String(current.text || "").trim();
+    if (nextText && nextText === previousText) stableReads += 1;
+    else stableReads = 0;
+    previousText = nextText;
+    const loading = /加载中|生成中|识别中|分析中|思考中|总结中|正在.{0,8}(?:生成|分析|识别|思考|加载|总结)/.test(nextText);
+    const enoughContent = nextText.length >= 100 || /\d{1,3}%\s*人推荐/.test(nextText);
+    const elapsed = Date.now() - startedAt;
+    const stableEmptyFallback = elapsed >= 10000 && stableReads >= 5;
+    if (elapsed >= minWaitMs && stableReads >= 3 && (enoughContent || stableEmptyFallback) && !loading) break;
+    if (Date.now() - startedAt >= maxWaitMs) break;
+    await page.waitForTimeout(800);
+  }
+
+  const restoreState = await page.evaluate(() => {
+    const items = [];
+    let id = 0;
+    for (const element of document.querySelectorAll("*")) {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      if (rect.left < innerWidth * 0.55 || rect.right > innerWidth || element.scrollHeight <= element.clientHeight + 32 || !/(auto|scroll)/.test(style.overflowY)) continue;
+      const key = `dl-panel-scroll-${id++}`;
+      element.dataset.designLabPanelScroll = key;
+      items.push({ key, top: element.scrollTop });
+    }
+    return { windowY: window.scrollY, items };
+  }).catch(() => ({ windowY: 0, items: [] }));
+
+  const recommendations = [];
+  const textBlocks = [];
+  const screenshots = [];
+  const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight })).catch(() => ({ width: 1280, height: 900 }));
+  let previousState = "";
+  for (let step = 0; step < 5; step += 1) {
+    const result = await collectRightPanelRecommendations(page).catch(() => null);
+    if (result) {
+      recommendations.push(...(result.recommendations || []));
+      if (result.text) textBlocks.push(result.text);
+      if (result.screenshotBase64) screenshots.push(result.screenshotBase64);
+    }
+    const state = await page.evaluate(() => JSON.stringify({
+      windowY: window.scrollY,
+      items: [...document.querySelectorAll("[data-design-lab-panel-scroll]")].map((element) => [element.dataset.designLabPanelScroll, element.scrollTop]),
+    })).catch(() => "");
+    if (!state || state === previousState) break;
+    previousState = state;
+    await page.mouse.move(Math.round(viewport.width * 0.88), Math.round(viewport.height * 0.78));
+    await page.mouse.wheel(0, Math.round(viewport.height * 0.72));
+    await page.waitForTimeout(450);
+  }
+  await page.evaluate((saved) => {
+    for (const item of saved.items || []) {
+      const element = [...document.querySelectorAll("[data-design-lab-panel-scroll]")].find((node) => node.dataset.designLabPanelScroll === item.key);
+      if (element) {
+        element.scrollTop = item.top;
+        delete element.dataset.designLabPanelScroll;
+      }
+    }
+    window.scrollTo(0, saved.windowY || 0);
+  }, restoreState).catch(() => {});
+
+  const unique = new Map();
+  for (const item of recommendations.sort((a, b) => Number(b.blue || b.fromRecommendationCard) - Number(a.blue || a.fromRecommendationCard) || a.y - b.y)) {
+    const key = item.name.toLowerCase();
+    if (!unique.has(key)) unique.set(key, item);
+  }
+  return {
+    recommendations: [...unique.values()].slice(0, 30),
+    text: [...new Set(textBlocks)].join("\n\n").slice(0, 24000),
+    screenshots,
+  };
 }
 
 function normalizePostUrl(value) {
@@ -226,6 +396,132 @@ function relevance(text, project, query) {
   return Math.min(99, 45 + hits * 9);
 }
 
+function matchesResearchTerms(project, query, ...values) {
+  const normalize = (value) => String(value || "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+  // Keep fields separate: a term must occur inside an actual title/body/tag
+  // field, and must not be accidentally assembled across field boundaries.
+  const fields = values.flatMap((value) => Array.isArray(value) ? value : [value]).map(normalize).filter(Boolean);
+  const keywords = Array.isArray(project?.researchKeywords) ? project.researchKeywords : [];
+  const terms = [...new Set([...keywords, query].map(normalize).filter((value) => value.length >= 2))];
+  return terms.some((term) => fields.some((field) => field.includes(term)));
+}
+
+function extractHashtags(...values) {
+  const tags = [];
+  for (const value of values) {
+    const text = String(value || "").normalize("NFKC");
+    for (const match of text.matchAll(/#([\p{L}\p{N}_]+)/gu)) tags.push(match[1]);
+  }
+  return [...new Set(tags)];
+}
+
+function canonicalVoiceDetailUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (!/(^|\.)new-ux\.jd\.com$/i.test(url.hostname)) return "";
+    const entityParams = [...url.searchParams.entries()].filter(([name]) =>
+      /^(?:id|uuid|feedbackid|issueid|problemid|questionid|voiceid|ticketid|recordid|complaintid|experienceid)$/i.test(name)
+      || /^(?:feedback|issue|problem|question|voice|ticket|record|complaint|experience)_(?:id|key|code)$/i.test(name),
+    );
+    const path = url.pathname.replace(/\/+$/, "");
+    const detailPath = /\/(?:detail|issue-detail|feedback-detail|problem-detail)(?:\/|$)/i.test(path)
+      || /\/(?:issue|feedback|problem|question)\/[^/]+$/i.test(path);
+    const hashHasIdentity = /#\/(?:detail|issue|feedback|problem|question)\/[^/?#]+/i.test(url.hash)
+      || /#(?:id|feedbackId|issueId|problemId|questionId)=?[\w-]{6,}/i.test(url.hash);
+    if (!entityParams.length && !detailPath && !hashHasIdentity) return "";
+    if (entityParams.length) {
+      const stableParams = new URLSearchParams();
+      for (const [name, value] of entityParams.sort(([a], [b]) => a.localeCompare(b))) stableParams.set(name.toLowerCase(), value);
+      url.search = stableParams.toString();
+      url.hash = "";
+    } else if (hashHasIdentity) {
+      url.search = "";
+    } else {
+      url.search = "";
+      url.hash = "";
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch { return ""; }
+}
+
+function voiceFeedbackId(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (!/(^|\.)new-ux\.jd\.com$/i.test(url.hostname)) return "";
+    return [...url.searchParams.entries()].find(([name, id]) => name.toLowerCase() === "feedbackid" && id.trim())?.[1] || "";
+  } catch { return ""; }
+}
+
+async function voiceFeedbackUrl(page, identityText = "") {
+  if (voiceFeedbackId(page.url())) return page.url();
+  const identity = canonicalPostText(identityText);
+  const anchors = await page.evaluate((needle) => {
+    const clean = (value) => String(value || "").normalize("NFKC").toLocaleLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[\s\p{P}\p{S}]+/gu, "");
+    const matches = [];
+    for (const anchor of document.querySelectorAll("a[href]")) {
+      const rect = anchor.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= innerHeight) continue;
+      const scope = anchor.closest("[role='dialog'], [aria-modal='true'], [class*='modal'], [class*='detail'], [class*='drawer']") || anchor.parentElement;
+      const scopeText = clean(scope?.innerText || anchor.innerText);
+      if (needle.length >= 24 && !scopeText.includes(needle.slice(0, 24))) continue;
+      matches.push(anchor.href);
+    }
+    return [...new Set(matches)];
+  }, identity).catch(() => []);
+  return anchors.find((value) => voiceFeedbackId(value)) || "";
+}
+
+function canonicalPostText(value) {
+  return String(value || "").normalize("NFKC").toLocaleLowerCase()
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\b(?:转发|评论|赞|浏览)\s*\d*/g, "")
+    .replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+const minimumGameplayPostDate = new Date(2025, 9, 1);
+
+function parsePostDate(text) {
+  const value = String(text || "");
+  const full = value.match(/(20\d{2})[-./年](\d{1,2})(?:[-./月](\d{1,2})日?)?/);
+  if (full) return new Date(Number(full[1]), Number(full[2]) - 1, Number(full[3] || 1));
+  const monthDay = value.match(/(?:^|\D)(\d{1,2})\s*[-./月]\s*(\d{1,2})日?(?:\D|$)/);
+  if (monthDay) {
+    const now = new Date();
+    let year = now.getFullYear();
+    const date = new Date(year, Number(monthDay[1]) - 1, Number(monthDay[2]));
+    if (date > now) date.setFullYear(year - 1);
+    return date;
+  }
+  const relative = value.match(/今天|昨天|前天/);
+  if (relative) {
+    const date = new Date();
+    date.setDate(date.getDate() - ({ 今天: 0, 昨天: 1, 前天: 2 }[relative[0]] || 0));
+    return date;
+  }
+  return null;
+}
+
+function normalizedPostDate(text) {
+  const date = parsePostDate(text);
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function isRecentGameplayPost(text) {
+  const date = parsePostDate(text);
+  return Boolean(date && date >= minimumGameplayPostDate);
+}
+
+function isWithinFeedbackDateRange(text, project = {}) {
+  const date = parsePostDate(text);
+  if (!date || Number.isNaN(date.getTime())) return false;
+  const published = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const start = String(project.feedbackStartDate || "").trim();
+  const end = String(project.feedbackEndDate || "").trim();
+  if (!start || !end) return date >= minimumGameplayPostDate;
+  return published >= start && published <= end;
+}
+
 async function pageGuard(page) {
   const text = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "");
   if (/登录后推荐更懂你的笔记|手机号登录|验证码登录|扫码登录/.test(text)) {
@@ -233,6 +529,882 @@ async function pageGuard(page) {
   }
   if (/访问频繁|请求频繁|安全验证|网络环境存在风险/.test(text)) {
     throw new RateLimitedError();
+  }
+}
+
+const gameplayPlatformSpecs = [
+  { id: "xiaohongshu", source: "xiaohongshu", name: "小红书", home: "https://www.xiaohongshu.com/explore", loginPattern: /登录后推荐更懂你的笔记|手机号登录|验证码登录|扫码登录/ },
+  { id: "weibo", source: "weibo", name: "微博", home: "https://weibo.com/", search: (query) => `https://s.weibo.com/weibo?q=${encodeURIComponent(query)}`, loginPattern: /登录微博|立即登录|扫码登录|手机号登录/ },
+  { id: "voiceOfUser", source: "voice_of_user", name: "用户之声", home: "https://new-ux.jd.com/issue?channel_id=1", loginPattern: /请登录|账号登录|登录京东|登录后查看/ },
+];
+
+async function platformPageState(page, spec) {
+  return page.evaluate((platformId) => {
+    const visible = (element) => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    };
+    const hasPasswordField = [...document.querySelectorAll("input[type='password'], input[name*='password' i]")].some(visible);
+    const hasLoginDialog = [...document.querySelectorAll("[role='dialog'], form")].some((element) => visible(element) && /登录|账号/.test(element.textContent || ""));
+    const text = document.body?.innerText || "";
+    const hasVoiceContent = platformId === "voiceOfUser" && (
+      /用户原声|我的订阅|产品模块|问题原声/.test(text)
+    );
+    return { url: location.href, text, hasPasswordField, hasLoginDialog, hasVoiceContent, ready: document.readyState !== "loading" && text.trim().length > 20 };
+  }, spec.id).catch(() => ({ url: page.url(), text: "", hasPasswordField: false, hasLoginDialog: false, hasVoiceContent: false, ready: false }));
+}
+
+async function requiresPlatformLogin(page, spec, { waitForRedirect = false } = {}) {
+  const attempts = waitForRedirect ? 14 : 1;
+  let voiceAuthenticated = false;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const state = await platformPageState(page, spec);
+    const loginUrl = /login|passport|signin/i.test(state.url);
+    if (loginUrl || state.hasPasswordField || state.hasLoginDialog) return true;
+    if (spec.id === "voiceOfUser") {
+      if (spec.loginPattern.test(state.text)) return true;
+      // Wait through the redirect window even if the old application shell is
+      // visible: its content can appear before an expired session redirects.
+      let isVoicePage = false;
+      try { isVoicePage = new URL(state.url).hostname === "new-ux.jd.com"; } catch {}
+      voiceAuthenticated = isVoicePage && state.ready && state.hasVoiceContent;
+    } else if (spec.loginPattern.test(state.text)) {
+      return true;
+    } else if (state.ready && state.text.trim().length > 100) {
+      return false;
+    }
+    if (attempt + 1 < attempts) await page.waitForTimeout(500);
+  }
+  // An empty or stalled SSO redirect is not evidence of an authenticated session.
+  return spec.id === "voiceOfUser" ? !voiceAuthenticated : false;
+}
+
+async function ensureGameplayPlatformLogins(context, task, activity) {
+  const ignored = new Set(activity.ignoredPlatforms || []);
+  const selected = new Set(Array.isArray(task.project?.feedbackPlatforms) && task.project.feedbackPlatforms.length
+    ? task.project.feedbackPlatforms : gameplayPlatformSpecs.map((spec) => spec.id));
+  const missing = [];
+  for (const spec of gameplayPlatformSpecs) {
+    if (ignored.has(spec.id) || !selected.has(spec.id)) continue;
+    const existingPages = context.pages().filter((item) => {
+      try {
+        const url = new URL(item.url());
+        if (spec.id === "voiceOfUser") return url.hostname === "new-ux.jd.com" || (url.hostname === "ssa.jd.com" && /^\/sso\/login/i.test(url.pathname));
+        const domain = spec.id === "weibo" ? "weibo.com" : "xiaohongshu.com";
+        return url.hostname === domain || url.hostname.endsWith(`.${domain}`);
+      }
+      catch { return false; }
+    });
+    if (existingPages.length) {
+      // An SSO/login tab takes precedence over another stale or partially loaded tab
+      // from the same platform; never let the latter make this platform pass.
+      const loginPages = existingPages.filter((item) => /login|passport|signin/i.test(item.url()));
+      if (spec.id === "voiceOfUser" && !loginPages.length) {
+        // Reopen the actual service so a cached page cannot stand in for a
+        // current authentication check. Keep it open if SSO is required.
+        const loaded = await existingPages[0].goto(spec.home, { waitUntil: "domcontentloaded", timeout: 25000 }).then(() => true, () => false);
+        if (!loaded) {
+          missing.push(spec);
+          await existingPages[0].bringToFront().catch(() => {});
+          continue;
+        }
+      }
+      const requiresLogin = loginPages.length > 0 || (await Promise.all(existingPages.map((item) =>
+        requiresPlatformLogin(item, spec, { waitForRedirect: true }),
+      ))).some(Boolean);
+      if (requiresLogin) {
+        missing.push(spec);
+        await (loginPages[0] || existingPages[0]).bringToFront().catch(() => {});
+      }
+      continue;
+    }
+    const blankPage = spec.id === "xiaohongshu"
+      ? context.pages().find((item) => item.url() === "about:blank")
+      : null;
+    const page = blankPage || await context.newPage();
+    const loaded = await page.goto(spec.home, { waitUntil: "domcontentloaded", timeout: 25000 }).then(() => true, () => false);
+    if (!loaded || await requiresPlatformLogin(page, spec, { waitForRedirect: true })) missing.push(spec);
+  }
+  if (!missing.length) return true;
+  const names = missing.map((item) => item.name);
+  await updateTask(task.id, "needs_login", { ...activity, phase: "needs_login", loginRequiredPlatforms: names, message: `已打开${names.join("、")}页签，请完成登录后继续` }, {
+    error: `请先完成${names.join("、")}登录后再开始玩法研究`, blockedSource: missing[0].id, actionUrl: missing[0].home,
+  });
+  return false;
+}
+
+async function setVoiceOfUserDateRange(page, requestedStart, requestedEnd) {
+  const rangePattern = /^\s*\d{4}-\d{2}-\d{2}\s*[~～—-]\s*\d{4}-\d{2}-\d{2}\s*$/;
+  const visibleInputs = page.locator("input").filter({ visible: true });
+  const rangeIndex = await visibleInputs.evaluateAll((nodes) => nodes.findIndex((node) =>
+    /^\s*\d{4}-\d{2}-\d{2}\s*[~～—-]\s*\d{4}-\d{2}-\d{2}\s*$/.test(node.value || ""),
+  )).catch(() => -1);
+  const rangeText = page.getByText(rangePattern).filter({ visible: true }).first();
+  if (rangeIndex >= 0) await visibleInputs.nth(rangeIndex).click().catch(() => {});
+  else if (await rangeText.isVisible().catch(() => false)) await rangeText.click().catch(() => {});
+  else {
+    const calendarButton = page.locator("button[aria-label*='日期'], button[aria-label*='日历'], [role='button'][aria-label*='日期'], [role='button'][aria-label*='日历']").filter({ visible: true }).first();
+    if (await calendarButton.isVisible().catch(() => false)) await calendarButton.click().catch(() => {});
+  }
+  await page.waitForTimeout(250);
+  const dateFields = await page.locator("input").evaluateAll((nodes) => nodes.map((node, index) => {
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return {
+      index, value: node.value || "",
+      visible: style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0,
+    };
+  }).filter((item) => item.visible && /^\d{4}-\d{2}-\d{2}$/.test(item.value))).catch(() => []);
+  if (dateFields.length < 2) throw new Error("用户之声日期选择器未展开或未找到起止日期输入框，已停止该平台采集。");
+  const values = [requestedStart || "2025-10-01", requestedEnd || new Date().toISOString().slice(0, 10)];
+  for (const [index, value] of values.entries()) {
+    const currentDateFields = await page.locator("input").evaluateAll((nodes) => nodes.map((node, fieldIndex) => {
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return { index: fieldIndex, value: node.value || "", visible: style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 };
+    }).filter((field) => field.visible && /^\d{4}-\d{2}-\d{2}$/.test(field.value))).catch(() => []);
+    const field = currentDateFields.slice(-2)[index];
+    if (!field) throw new Error(`用户之声日期选择器展开后未找到${index === 0 ? "开始" : "结束"}日期输入框，已停止采集。`);
+    const input = page.locator("input").nth(field.index);
+    await input.click().catch(() => {});
+    await input.press("ControlOrMeta+A").catch(() => {});
+    await input.pressSequentially(value, { delay: 20 }).catch(() => {});
+    let actualValue = await input.inputValue().catch(() => "");
+    if (actualValue !== value) {
+      await input.fill(value).catch(() => {});
+      actualValue = await input.inputValue().catch(() => "");
+    }
+    if (actualValue !== value) {
+      const attributes = await input.evaluate((node) => ({ type: node.getAttribute("type"), readOnly: node.readOnly, disabled: node.disabled, placeholder: node.getAttribute("placeholder") })).catch(() => ({}));
+      throw new Error(`用户之声${index === 0 ? "开始" : "结束"}日期输入失败（${JSON.stringify(attributes)}），已停止采集。`);
+    }
+  }
+  const finalFields = await page.locator("input").evaluateAll((nodes) => nodes.map((node, index) => {
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return { index, value: node.value || "", visible: style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 };
+  }).filter((field) => field.visible && /^\d{4}-\d{2}-\d{2}$/.test(field.value))).catch(() => []);
+  await page.locator("input").nth(finalFields.at(-1)?.index ?? -1).press("Enter").catch(() => {});
+  await page.waitForTimeout(700);
+  const appliedFields = await page.locator("input").evaluateAll((nodes) => nodes.map((node) => {
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return { value: node.value || "", visible: style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0 };
+  }).filter((field) => field.visible && /^\d{4}-\d{2}-\d{2}$/.test(field.value))).catch(() => []);
+  const applied = appliedFields.slice(-2).map((field, index) => field.value === values[index]);
+  if (applied.some((value) => !value)) throw new Error(`用户之声日期筛选未能应用指定区间（${values[0]} 至 ${values[1]}），已停止该平台采集。`);
+  const resultsHeading = page.getByText("搜索结果", { exact: true }).filter({ visible: true }).first();
+  if (await resultsHeading.isVisible().catch(() => false)) await resultsHeading.click().catch(() => {});
+  else await page.locator("body").click({ position: { x: 12, y: 12 } }).catch(() => {});
+  await page.waitForTimeout(250);
+}
+
+async function locateCommunitySearchInput(page, spec, { activate = false } = {}) {
+  const selectors = spec.id === "weibo"
+    ? [
+        "input[placeholder*='搜']", "input[aria-label*='搜']", "input[type='search']",
+        "input[name='q']", "#search_input", "input[class*='search']", "form[action*='search'] input",
+      ]
+    : ["input[placeholder*='搜索']", "textarea[placeholder*='搜索']", "input[type='search']"];
+  const locate = async () => {
+    for (const selector of selectors) {
+      const matches = page.locator(selector).filter({ visible: true });
+      const count = await matches.count().catch(() => 0);
+      for (let index = 0; index < Math.min(count, 5); index += 1) {
+        const input = matches.nth(index);
+        if (await input.isVisible().catch(() => false)
+          && await input.isEnabled().catch(() => false)
+          && await input.isEditable().catch(() => false)) return input;
+      }
+    }
+    if (spec.id === "weibo") {
+      // In Weibo's expanded search overlay the input can have no placeholder,
+      // aria-label, or search class. Keep the fallback inside the header search
+      // region: the composer also exposes a large editable control lower down.
+      const controls = page.locator("input:not([type='hidden']), textarea, [role='combobox'], [role='textbox'], [contenteditable='true']").filter({ visible: true });
+      const count = await controls.count().catch(() => 0);
+      for (let index = 0; index < Math.min(count, 20); index += 1) {
+        const control = controls.nth(index);
+        const isTopSearch = await control.evaluate((node) => {
+          const rect = node.getBoundingClientRect();
+          const style = getComputedStyle(node);
+          return rect.top >= 0 && rect.top < 105 && rect.width >= 180 && rect.height >= 24
+            && style.display !== "none" && style.visibility !== "hidden"
+            && !node.disabled && !node.readOnly && node.getAttribute("aria-disabled") !== "true";
+        }).catch(() => false);
+        if (isTopSearch && await control.isEditable().catch(() => false)) return control;
+      }
+    }
+    return null;
+  };
+  if (spec.id === "weibo" && activate) {
+    // Activate Weibo's header search pill first. It may replace itself with a
+    // fresh input after the click, so never reuse a locator from before it.
+    const initialInput = await locate();
+    if (initialInput) await initialInput.click({ timeout: 2000 }).catch(() => {});
+    else {
+      const searchSurface = page.getByText(/搜索微博|搜索/).filter({ visible: true }).first();
+      if (await searchSurface.isVisible().catch(() => false)) await searchSurface.click({ timeout: 2000 }).catch(() => {});
+      else {
+        const searchButton = page.locator("button[aria-label*='搜'], [role='button'][aria-label*='搜'], [class*='search-icon'], [class*='Search_icon']").filter({ visible: true }).first();
+        if (await searchButton.isVisible().catch(() => false)) await searchButton.click({ timeout: 1500 }).catch(() => {});
+      }
+    }
+    await page.waitForTimeout(250);
+    const activatedInput = await locate();
+    if (activatedInput) return activatedInput;
+  }
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    const input = await locate();
+    if (input) return input;
+    await page.waitForTimeout(300);
+  }
+  return null;
+}
+
+async function fillCommunitySearchInput(page, spec, query, { activate = false } = {}) {
+  try {
+    let input = await locateCommunitySearchInput(page, spec, { activate });
+    if (!input) throw new Error("搜索框未找到");
+    if (!activate) {
+      await input.click({ timeout: 4000 });
+      await page.waitForTimeout(200);
+      // Clicking can replace the header input in a search overlay.
+      input = await locateCommunitySearchInput(page, spec);
+      if (!input) throw new Error("点击搜索栏后没有可输入的搜索框");
+    }
+    await input.press("ControlOrMeta+A", { timeout: 3000 }).catch(() => {});
+    await input.pressSequentially(query, { delay: 25, timeout: 5000 });
+    let actual = await input.inputValue({ timeout: 3000 }).catch(() => "");
+    if (actual !== query) {
+      input = await locateCommunitySearchInput(page, spec);
+      if (!input) throw new Error("输入框在键入时被页面替换");
+      await input.fill(query, { timeout: 5000 });
+      actual = await input.inputValue({ timeout: 3000 }).catch(() => "");
+    }
+    if (actual !== query) throw new Error("输入内容与关键词不一致");
+    return input;
+  } catch (error) {
+    throw new Error(`${spec.name}搜索框无法输入关键词：${error.message}`);
+  }
+}
+
+async function searchCommunityCards(page, spec, query) {
+  let activePage = page;
+  await page.goto(spec.home, { waitUntil: "domcontentloaded", timeout: 25000 }).catch(() => {});
+  await page.waitForTimeout(1300);
+  if (await requiresPlatformLogin(page, spec, { waitForRedirect: true })) throw new LoginRequiredError(spec.name, page.url() || spec.home);
+  let search = spec.id === "weibo" ? null : await locateCommunitySearchInput(page, spec);
+  if (spec.id === "voiceOfUser") {
+    if (!search) throw new Error("用户之声搜索框未找到或不可输入，已停止采集。");
+    const previousUrl = page.url();
+    search = await fillCommunitySearchInput(page, spec, query);
+    await search.press("Enter");
+    const enteredResults = await page.waitForFunction(({ previousUrl, query }) => {
+      const text = document.body?.innerText || "";
+      return location.href !== previousUrl || (text.includes(query) && /搜索结果|相关结果|暂无结果|没有找到|共\s*\d+\s*条/.test(text));
+    }, { previousUrl, query }, { timeout: 8000 }).then(() => true, () => false);
+    if (await requiresPlatformLogin(page, spec, { waitForRedirect: true })) throw new LoginRequiredError(spec.name, page.url() || spec.home);
+    if (!enteredResults) throw new Error("用户之声未确认进入搜索结果，已停止采集。");
+    await setVoiceOfUserDateRange(page, task.project?.feedbackStartDate, task.project?.feedbackEndDate);
+  } else if (spec.id === "weibo") {
+    search = await fillCommunitySearchInput(page, spec, query, { activate: true });
+    const popupPromise = page.waitForEvent("popup", { timeout: 5000 }).catch(() => null);
+    await search.press("Enter");
+    const popup = await popupPromise;
+    if (popup) {
+      activePage = popup;
+      await popup.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+    }
+    // Weibo may remove spaces from the submitted phrase in its q parameter
+    // (e.g. "JOY游记 互动活动" becomes "JOY游记互动活动").
+    const normalizedQuery = String(query).normalize("NFKC").replace(/\s+/g, "");
+    const deadline = Date.now() + 10000;
+    let enteredResults = false;
+    while (Date.now() < deadline) {
+      const resultPage = page.context().pages().find((candidatePage) => {
+        try {
+          const url = new URL(candidatePage.url());
+          const q = String(url.searchParams.get("q") || "").normalize("NFKC").replace(/\s+/g, "");
+          return url.hostname === "s.weibo.com" && url.pathname.startsWith("/weibo")
+            && (q === normalizedQuery || q.includes(normalizedQuery));
+        } catch { return false; }
+      });
+      if (resultPage) {
+        activePage = resultPage;
+        enteredResults = true;
+        break;
+      }
+      // Some Weibo layouts keep the search phrase in the page body rather than
+      // the URL; accept that only when the visible result page is already open.
+      for (const candidatePage of page.context().pages()) {
+        if (!/s\.weibo\.com\/weibo/.test(candidatePage.url())) continue;
+        const text = await candidatePage.locator("body").innerText({ timeout: 1000 }).catch(() => "");
+        if (text.includes(query) && /搜索结果|综合|实时/.test(text)) {
+          activePage = candidatePage;
+          enteredResults = true;
+          break;
+        }
+      }
+      if (enteredResults) break;
+      await page.waitForTimeout(250);
+    }
+    if (!enteredResults) throw new Error("微博按回车后未确认进入该关键词的搜索结果页，已停止采集。");
+    await activePage.waitForTimeout(900);
+  } else if (search) {
+    search = await fillCommunitySearchInput(page, spec, query).catch(() => null);
+    await search.press("Enter").catch(() => {});
+    await page.waitForTimeout(1000);
+  } else if (spec.search) {
+    await page.goto(spec.search(query), { waitUntil: "domcontentloaded", timeout: 25000 }).catch(() => {});
+    await page.waitForTimeout(900);
+  }
+  const found = new Map();
+  // Weibo marks the actual post with feed_list_item and often nests it inside
+  // card-wrap. Query one level only; combining both selectors duplicates every
+  // post and makes a later exact-match check look ambiguous.
+  const primaryWeiboCards = spec.id === "weibo"
+    ? await activePage.locator("div[action-type='feed_list_item']").count().catch(() => 0)
+    : 0;
+  const voiceCards = spec.id === "voiceOfUser"
+    ? await activePage.locator(".user-voice-card-wrapper").count().catch(() => 0)
+    : 0;
+  const selector = spec.id === "weibo"
+    ? (primaryWeiboCards ? "div[action-type='feed_list_item']" : "div.card-wrap")
+    // Prefer the observed card boundary. The generic fallback is retained for
+    // layouts where JD has changed its class names.
+    : spec.id === "voiceOfUser" && voiceCards
+      ? ".user-voice-card-wrapper"
+      : "article, [class*='issue'], [class*='feedback'], [class*='card'], [class*='item']";
+  for (let step = 0; step < 10; step += 1) {
+    const cards = await activePage.locator(selector).evaluateAll((nodes, specId) => {
+      const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+      return nodes.map((node, nodeIndex) => {
+        const rect = node.getBoundingClientRect();
+        const text = clean(node.innerText);
+        const links = [...node.querySelectorAll("a[href]")].map((anchor) => anchor.href).filter(Boolean);
+        // Weibo search results are already post-detail cards. Their first link
+        // is commonly the author's profile, so never use it as a post URL.
+        // Voice of User exposes feedbackId after a result card is opened.
+        // Links inside the card can point elsewhere and are not reliable IDs.
+        const url = specId === "weibo" || specId === "voiceOfUser" ? "" : (links.find((href) => !/login|signup|help|search|javascript:/i.test(href)) || "");
+        const sourceUrl = specId === "weibo"
+          ? (links.find((href) => /\/(?:detail|status|comment)\//i.test(href) || /\/\d{5,}\/[a-z\d]{5,}/i.test(new URL(href).pathname)) || "")
+          : url;
+        const postText = specId === "weibo" ? clean(node.querySelector("[node-type='feed_list_content'], .txt, [class*='feed_list_content']")?.innerText || text) : text;
+        const author = specId === "weibo" ? clean(node.querySelector("a[namecard], .name, [class*='name']")?.textContent || "") : "";
+        return { nodeIndex, url, sourceUrl, feedbackId: "", title: clean(node.querySelector("h1,h2,h3,[class*='title']")?.textContent || text.split(" ").slice(0, 20).join(" ")).slice(0, 160), text: text.slice(0, 2200), identityText: postText.slice(0, 1800), author, visible: rect.width > 240 && rect.height > 100 && rect.bottom > 0 && rect.top < innerHeight };
+      }).filter((card) => card.visible && card.title.length >= 8 && card.text.length >= 30);
+    }, spec.id).catch(() => []);
+    for (const card of cards) {
+      const key = `${card.title}:${(card.identityText || card.text).slice(0, 160)}`;
+      if (!found.has(key)) found.set(key, card);
+    }
+    if (found.size >= 12) break;
+    await activePage.mouse.wheel(0, 900);
+    await activePage.waitForTimeout(700);
+  }
+  if (spec.id === "voiceOfUser") {
+    await activePage.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" })).catch(() => {});
+    await activePage.waitForTimeout(300);
+  }
+  return { cards: [...found.values()], page: activePage };
+}
+
+async function expandWeiboComments(page, postCard = page.locator("body")) {
+  const clickables = postCard.locator("a, button, [role='button'], [action-type], [node-type]").filter({ visible: true });
+  const count = await clickables.count().catch(() => 0);
+  let target = null;
+  let bestScore = 0;
+  for (let index = 0; index < Math.min(count, 500); index += 1) {
+    const locator = clickables.nth(index);
+    const metadata = await locator.evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        label: [node.getAttribute("action-type"), node.getAttribute("node-type"), node.getAttribute("aria-label"), node.getAttribute("title"), node.className, node.innerText].join(" "),
+        top: rect.top, width: rect.width, height: rect.height,
+      };
+    }).catch(() => null);
+    if (!metadata || metadata.width < 12 || metadata.height < 12 || metadata.top < 0) continue;
+    if (!/comment|评论/i.test(metadata.label)) continue;
+    const label = metadata.label;
+    const score = (/feed_list_comment|comment_btn|评论/i.test(label) ? 100 : 0)
+      + (metadata.top > 250 ? 10 : 0)
+      - (metadata.width > 700 ? 40 : 0);
+    if (score > bestScore) { bestScore = score; target = locator; }
+  }
+  if (!target) return false;
+  await target.click({ timeout: 4000 }).catch(() => {});
+  await page.waitForTimeout(700);
+  return true;
+}
+
+async function readWeiboComments(page, postCard = page.locator("body")) {
+  const selectors = [
+    "[node-type='comment_list'] [node-type='comment_item']",
+    "[node-type*='comment_list'] [class*='comment']",
+    "[class*='comment-list'] [class*='comment-item']",
+    "[class*='commentList'] [class*='commentItem']",
+    "[class*='comment-item']",
+  ];
+  for (const selector of selectors) {
+    const values = await postCard.locator(selector).filter({ visible: true }).allTextContents().catch(() => []);
+    const comments = [...new Set(values.map((item) => item.replace(/\s+/g, " ").trim()).filter((item) => item.length >= 8 && item.length <= 500))];
+    if (comments.length) return comments.slice(0, 8);
+  }
+  return [];
+}
+
+async function openVoiceOfUserDetail(resultsPage, card, agent) {
+  const observedCardCount = await resultsPage.locator(".user-voice-card-wrapper").count().catch(() => 0);
+  const selector = observedCardCount
+    ? ".user-voice-card-wrapper"
+    : "article, [class*='issue'], [class*='feedback'], [class*='card'], [class*='item']";
+  const candidateCards = resultsPage.locator(selector);
+  const textNeedle = canonicalPostText(card.identityText || card.text).slice(0, 72);
+  if (textNeedle.length < 24) return { page: resultsPage, popup: null, opened: false, originalUrl: resultsPage.url() };
+  const findCardIndex = () => candidateCards.evaluateAll((nodes, args) => {
+    const normalize = (value) => String(value || "").normalize("NFKC").toLocaleLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[\s\p{P}\p{S}]+/gu, "");
+    const matches = nodes.map((node, index) => {
+      const rect = node.getBoundingClientRect();
+      const text = normalize(node.innerText);
+      return { node, index, width: rect.width, height: rect.height, textLength: text.length, text, visible: rect.width > 240 && rect.height > 100 && rect.bottom > 0 && rect.top < innerHeight };
+    }).filter((item) => item.visible && item.textLength >= 24 && item.textLength <= 5000 && item.text.includes(args.textNeedle));
+    const leaves = matches.filter((item) => !matches.some((other) => other.node !== item.node && item.node.contains(other.node)));
+    return leaves.length === 1 ? leaves[0].index : -1;
+  }, { textNeedle }).catch(() => -1);
+  let cardIndex = -1;
+  // JD may virtualize the results list. Walk it until the captured card is
+  // mounted again instead of assuming the card still exists after collection.
+  for (let attempt = 0; attempt < 12 && cardIndex < 0; attempt += 1) {
+    cardIndex = await findCardIndex();
+    if (cardIndex >= 0) break;
+    const atBottom = await resultsPage.evaluate(() => window.scrollY + innerHeight >= document.documentElement.scrollHeight - 4).catch(() => true);
+    if (atBottom) break;
+    await resultsPage.mouse.wheel(0, Math.max(600, Math.round((await resultsPage.evaluate(() => innerHeight).catch(() => 800)) * 0.75)));
+    await resultsPage.waitForTimeout(250);
+  }
+  if (cardIndex < 0) return { page: resultsPage, popup: null, opened: false, originalUrl: resultsPage.url() };
+  const cardLocator = candidateCards.nth(cardIndex);
+  if (!await cardLocator.count().catch(() => 0)) return { page: resultsPage, popup: null, opened: false, originalUrl: resultsPage.url() };
+  const originalUrl = resultsPage.url();
+  const pagesBeforeClick = new Set(resultsPage.context().pages());
+  await cardLocator.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+  const popupPromise = resultsPage.waitForEvent("popup", { timeout: 2500 }).catch(() => null);
+  // JD opens the detail modal from the result card itself. The unique
+  // feedbackId is added to the address bar afterward, not reliably exposed
+  // as a link inside the card.
+  // JD's detail entry is the feedback title inside the matching card. Using
+  // this stable control prevents clicks on a surrounding virtual-list item.
+  const titleTarget = cardLocator.locator(".feedback-title").filter({ visible: true }).first();
+  const hasTitleTarget = await titleTarget.isVisible().catch(() => false);
+  const clickText = String(card.identityText || card.text).trim().slice(0, 48);
+  const bodyTextTarget = clickText.length >= 12 ? cardLocator.getByText(clickText, { exact: false }).first() : null;
+  const canClickBody = bodyTextTarget && await bodyTextTarget.isVisible().catch(() => false);
+  if (hasTitleTarget) await titleTarget.click({ timeout: 5000 }).catch(() => {});
+  else if (canClickBody) await bodyTextTarget.click({ timeout: 5000 }).catch(() => cardLocator.click({ timeout: 5000 }).catch(() => {}));
+  else await cardLocator.click({ position: { x: 24, y: 28 }, timeout: 5000 }).catch(() => {});
+  let popup = await popupPromise;
+  const deadline = Date.now() + 15000;
+  let detailPage = popup || resultsPage;
+  let actualFeedbackUrl = "";
+  while (Date.now() < deadline) {
+    // Usually JD opens an in-page modal and pushes feedbackId into the current
+    // URL. Keep newly-created tabs in scope too, in case this account/layout
+    // opens the feedback detail in a tab after the popup event's short window.
+    const newlyOpenedPages = resultsPage.context().pages().filter((candidate) => !pagesBeforeClick.has(candidate));
+    const pages = [...new Set([resultsPage, ...(popup ? [popup] : []), ...newlyOpenedPages])];
+    let matchingPage = null;
+    for (const candidate of pages) {
+      const candidateUrl = await voiceFeedbackUrl(candidate, card.identityText || card.text);
+      if (candidateUrl && (candidate !== resultsPage || candidate.url() !== originalUrl)) {
+        matchingPage = candidate;
+        actualFeedbackUrl = candidateUrl;
+        break;
+      }
+    }
+    if (matchingPage) {
+      detailPage = matchingPage;
+      if (matchingPage !== resultsPage) popup = matchingPage;
+      break;
+    }
+    await resultsPage.waitForTimeout(200);
+  }
+  if (popup) await popup.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+  const opened = Boolean(voiceFeedbackId(actualFeedbackUrl));
+  if (!opened && popup) await popup.close().catch(() => {});
+  if (!opened && !popup) await resultsPage.keyboard.press("Escape").catch(() => {});
+  return { page: detailPage, popup, opened, originalUrl, feedbackId: voiceFeedbackId(actualFeedbackUrl), feedbackUrl: actualFeedbackUrl };
+}
+
+async function readVoiceFeedbackDetail(page, identityText) {
+  const needle = canonicalPostText(identityText).slice(0, 72);
+  if (needle.length < 24) return null;
+  const observedDetailCount = await page.locator(".voice-details").count().catch(() => 0);
+  const detailContainers = page.locator(observedDetailCount
+    ? ".voice-details"
+    : "[role='dialog'], [aria-modal='true'], [class*='modal'], [class*='detail'], [class*='drawer'], [class*='feedback'], article, body");
+  const matches = await detailContainers.evaluateAll((nodes, text) => nodes.map((node) => {
+    const rect = node.getBoundingClientRect();
+    const content = String(node.innerText || "").replace(/\s+/g, " ").trim();
+    const normalized = content.normalize("NFKC").toLocaleLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[\s\p{P}\p{S}]+/gu, "");
+    const className = typeof node.className === "string" ? node.className : "";
+    const isDetailSurface = node.matches("[role='dialog'], [aria-modal='true']") || /modal|detail|drawer/i.test(className);
+    const anchors = [text.slice(0, 24), text.slice(24, 48)].filter((part) => part.length >= 12);
+    const textMatch = anchors.some((part) => normalized.includes(part));
+    return {
+      rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+      area: rect.width * rect.height,
+      visible: rect.width > 260 && rect.height > 150 && rect.bottom > 0 && rect.top < innerHeight && content.length >= 80,
+      textMatch,
+      isDetailSurface,
+      text: content,
+    };
+  }).filter((item) => item.visible && item.textMatch).sort((a, b) => Number(b.isDetailSurface) - Number(a.isDetailSurface) || a.area - b.area), needle).catch(() => []);
+  const match = matches[0];
+  if (!match) {
+    // Some JD layouts render feedback in a route-backed panel without a
+    // dialog/detail class. The unique feedbackId was already verified, so
+    // retain the visible page as evidence instead of discarding the case.
+    const text = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "");
+    if (text.trim().length < 80) return null;
+    const screenshot = await page.screenshot({ type: "png" }).catch(() => null);
+    return screenshot ? { text: text.slice(0, 12000), screenshot } : null;
+  }
+  const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight })).catch(() => ({ width: 0, height: 0 }));
+  const left = Math.max(0, match.rect.x), top = Math.max(0, match.rect.y);
+  const box = {
+    x: left,
+    y: top,
+    width: Math.min(viewport.width - left, match.rect.width),
+    height: Math.min(viewport.height - top, match.rect.height),
+  };
+  if (box.width <= 0 || box.height <= 0) return null;
+  const screenshot = await page.screenshot({ type: "png", clip: box }).catch(() => null);
+  return screenshot ? { text: match.text, screenshot } : null;
+}
+
+async function waitForVoiceFeedbackDetail(page, identityText, expectedFeedbackId, timeoutMs = 18000) {
+  const deadline = Date.now() + timeoutMs;
+  let previousText = "";
+  let stableReads = 0;
+  while (Date.now() < deadline) {
+    const actualId = voiceFeedbackId(page.url());
+    if (expectedFeedbackId && actualId && actualId !== expectedFeedbackId) return null;
+    const detail = await readVoiceFeedbackDetail(page, identityText);
+    if (detail?.text) {
+      const currentText = canonicalPostText(detail.text);
+      stableReads = currentText === previousText ? stableReads + 1 : 0;
+      previousText = currentText;
+      // Wait for asynchronous body rendering to finish before recording
+      // evidence. The card identity must match and the detail text must settle.
+      if (currentText.length >= 80 && stableReads >= 1) return detail;
+    }
+    await page.waitForTimeout(500).catch(() => {});
+  }
+  return null;
+}
+
+async function openWeiboPostDetail(context, resultsPage, card) {
+  const href = String(card.sourceUrl || "").trim();
+  if (!/^https?:\/\/(?:www\.)?weibo\.com\/(?:detail|status|comment)\//i.test(href)
+    && !/^https?:\/\/(?:www\.)?weibo\.com\/\d{5,}\/[a-z\d]{5,}/i.test(href)) {
+    return { page: resultsPage, post: null, opened: false, url: "" };
+  }
+  const detailPage = await context.newPage();
+  try {
+    await detailPage.goto(href, { waitUntil: "domcontentloaded", timeout: 20000 });
+    const expected = canonicalPostText(card.identityText || card.text).slice(0, 48);
+    const expectedAuthor = canonicalPostText(card.author || "");
+    const deadline = Date.now() + 12000;
+    let verified = false;
+    while (Date.now() < deadline) {
+      const state = await detailPage.evaluate(() => {
+        const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+        const posts = [...document.querySelectorAll("div[action-type='feed_list_item'], div.card-wrap")];
+        return { body: clean(document.body?.innerText), posts: posts.map((node) => ({
+          text: clean(node.querySelector("[node-type='feed_list_content'], .txt, [class*='feed_list_content']")?.innerText || node.innerText),
+          author: clean(node.querySelector("a[namecard], .name, [class*='name']")?.textContent || ""),
+        })) };
+      }).catch(() => ({ body: "", posts: [] }));
+      const candidates = state.posts.filter((post) => canonicalPostText(post.text).includes(expected)
+        && (!expectedAuthor || !post.author || canonicalPostText(post.author) === expectedAuthor));
+      if (expected.length >= 40 && candidates.length === 1) {
+        const locator = detailPage.locator("div[action-type='feed_list_item'], div.card-wrap").filter({ hasText: card.identityText.slice(0, 48) });
+        if (await locator.count().catch(() => 0) === 1) {
+          await detailPage.waitForTimeout(700);
+          return { page: detailPage, post: locator, opened: true, url: detailPage.url() };
+        }
+      }
+      if (expected.length >= 40 && canonicalPostText(state.body).includes(expected)
+        && (!expectedAuthor || canonicalPostText(state.body).includes(expectedAuthor))) verified = true;
+      if (verified) {
+        await detailPage.waitForTimeout(700);
+        return { page: detailPage, post: detailPage.locator("body"), postIsBody: true, opened: true, url: detailPage.url() };
+      }
+      await detailPage.waitForTimeout(400);
+    }
+  } catch {}
+  await detailPage.close().catch(() => {});
+  return { page: resultsPage, post: null, opened: false, url: "" };
+}
+
+async function closeVoiceOfUserDetail(resultsPage, detailPage, popup, originalUrl) {
+  if (popup) {
+    await popup.close().catch(() => {});
+    return popup.isClosed();
+  }
+  const modal = resultsPage.locator(".base-modal-wrapper").filter({ visible: true }).first();
+  const modalVisible = await modal.isVisible().catch(() => false);
+  if (modalVisible) {
+    // The observed JD detail uses this header as its close control. Only move
+    // to the next card after the modal is actually gone.
+    const closeHeader = modal.locator(".modal-header-wrapper").filter({ visible: true }).first();
+    const closeButton = modal.getByRole("button", { name: "关闭", exact: true }).filter({ visible: true }).first();
+    if (await closeButton.isVisible().catch(() => false)) await closeButton.click({ timeout: 5000 }).catch(() => {});
+    else if (await closeHeader.isVisible().catch(() => false)) await closeHeader.click({ timeout: 5000 }).catch(() => {});
+    const closed = await modal.waitFor({ state: "hidden", timeout: 6000 }).then(() => true, () => false);
+    if (closed) return true;
+    await resultsPage.keyboard.press("Escape").catch(() => {});
+    if (await modal.waitFor({ state: "hidden", timeout: 3000 }).then(() => true, () => false)) return true;
+  }
+  if (detailPage.url() !== originalUrl) {
+    await detailPage.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {});
+  }
+  await resultsPage.waitForTimeout(300);
+  return !await modal.isVisible().catch(() => false);
+}
+
+async function collectCommunityPlatform(context, task, spec, queries, agent, activity) {
+  let page = context.pages().find((item) => {
+    try {
+      const url = new URL(item.url());
+      return spec.id === "voiceOfUser"
+        ? url.hostname === "new-ux.jd.com" || (url.hostname === "ssa.jd.com" && /^\/sso\/login/i.test(url.pathname))
+        : url.hostname === "weibo.com" || url.hostname.endsWith(".weibo.com");
+    }
+    catch { return false; }
+  }) || await context.newPage();
+  const seen = new Set();
+  let saved = 0;
+  let browsed = 0;
+  let reviewed = 0;
+  let openedDetails = 0;
+  let eligible = 0;
+  let currentQueryIndex = 0;
+  const skipped = {};
+  activity.sourceProgress ||= {};
+  const syncProgress = (phase = "reading") => {
+    activity.sourceProgress[spec.id] = {
+      ...activity.sourceProgress[spec.id], phase,
+      queryIndex: Math.min(currentQueryIndex + 1, platformQueries.length), queryTotal: platformQueries.length,
+      browsed, reviewed, opened: openedDetails, eligible, saved, skipped: { ...skipped },
+    };
+  };
+  const skip = (reason) => {
+    skipped[reason] = Number(skipped[reason] || 0) + 1;
+    syncProgress();
+  };
+  let holdForLogin = false;
+  const platformQueries = spec.id === "voiceOfUser" && String(task.project?.projectName || "").trim()
+    ? [String(task.project.projectName).trim()]
+    : queries;
+  const detailLimitPerQuery = spec.id === "voiceOfUser" ? 20 : 10;
+  // User Voice is intentionally allowed to inspect the first 20 result
+  // details. Other community sources retain their existing limit.
+  const target = platformQueries.length * detailLimitPerQuery;
+  try {
+    await page.goto(spec.home, { waitUntil: "domcontentloaded", timeout: 25000 }).catch(() => {});
+    if (await requiresPlatformLogin(page, spec, { waitForRedirect: true })) throw new LoginRequiredError(spec.name, page.url() || spec.home);
+    for (currentQueryIndex = 0; currentQueryIndex < platformQueries.length && saved < target; currentQueryIndex += 1) {
+      const query = platformQueries[currentQueryIndex];
+      activity.sourceProgress[spec.id] = { ...activity.sourceProgress[spec.id], phase: "searching", progress: Math.round((currentQueryIndex / platformQueries.length) * 100), queryIndex: currentQueryIndex + 1, queryTotal: platformQueries.length, browsed, reviewed, opened: openedDetails, eligible, saved, skipped: { ...skipped } };
+      await updateTask(task.id, "running", activity);
+      const result = await searchCommunityCards(page, spec, query);
+      page = result.page;
+      const cards = result.cards;
+      browsed += cards.length;
+      syncProgress("reading");
+      await updateTask(task.id, "running", activity);
+      const bodyText = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "");
+      if (spec.loginPattern.test(bodyText)) throw new LoginRequiredError(spec.name, page.url() || spec.home);
+      let detailsViewedThisQuery = 0;
+      for (const card of cards) {
+        if (detailsViewedThisQuery >= detailLimitPerQuery) break;
+        const identityKey = `${card.title}:${card.text.slice(0, 120)}`;
+        if (saved >= target) break;
+        if (seen.has(identityKey)) { skip("duplicate_in_run"); continue; }
+        if (spec.id !== "voiceOfUser" && spec.id !== "weibo" && !card.url) { skip("missing_post_url"); continue; }
+        seen.add(identityKey);
+        detailsViewedThisQuery += 1;
+        reviewed += 1;
+        syncProgress("reading");
+        const resultsPage = page;
+        let detailPage = page;
+        let voicePopup = null;
+        let voiceOriginalUrl = page.url();
+        let voiceOpened = false;
+        let voiceFeedbackLink = "";
+        let weiboDetailPopup = null;
+        let weiboSourceUrl = "";
+        try {
+          if (spec.id === "voiceOfUser") {
+            const opened = await openVoiceOfUserDetail(resultsPage, card, agent);
+            detailPage = opened.page;
+            voicePopup = opened.popup;
+            voiceOriginalUrl = opened.originalUrl;
+            voiceOpened = opened.opened;
+            voiceFeedbackLink = opened.feedbackUrl || "";
+            if (voiceOpened) openedDetails += 1;
+            syncProgress("reading");
+            if (!voiceOpened) { skip("detail_feedback_id_not_found"); continue; }
+          } else if (spec.id !== "weibo") {
+            await page.goto(card.url, { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
+            await page.waitForTimeout(600);
+          }
+          let weiboCard = null;
+          let weiboCardIsBody = false;
+          if (spec.id === "weibo") {
+            // Prefer the exact post URL observed on the result card (normally
+            // its timestamp link). Verify author and body on the opened page;
+            // if the platform blocks that route, fall back to the uniquely
+            // matched result card and label its URL honestly.
+            const openedWeibo = await openWeiboPostDetail(resultsPage.context(), resultsPage, card);
+            if (openedWeibo.opened) {
+              detailPage = openedWeibo.page;
+              weiboDetailPopup = openedWeibo.page !== resultsPage ? openedWeibo.page : null;
+              weiboSourceUrl = openedWeibo.url;
+              weiboCard = openedWeibo.post;
+              weiboCardIsBody = Boolean(openedWeibo.postIsBody);
+              openedDetails += 1;
+              syncProgress("reading");
+            }
+          }
+          if (spec.id === "weibo" && !weiboCard) {
+            const primaryPostCount = await detailPage.locator("div[action-type='feed_list_item']").count().catch(() => 0);
+            const weiboCards = detailPage.locator(primaryPostCount ? "div[action-type='feed_list_item']" : "div.card-wrap");
+            const expectedBody = String(card.identityText || "").replace(/\s+/g, " ").trim();
+            const matchingIndexes = await weiboCards.evaluateAll((nodes, args) => {
+              const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+              const normalizeName = (value) => clean(value).normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+              const normalizeText = (value) => clean(value).normalize("NFKC").toLocaleLowerCase().replace(/https?:\/\/\S+/g, "").replace(/\b(?:转发|评论|赞|浏览)\s*\d*/g, "").replace(/[\s\p{P}\p{S}]+/gu, "");
+              const target = normalizeText(args.identity);
+              if (target.length < 48) return [];
+              const targetPrefix = target.slice(0, Math.min(72, target.length));
+              return nodes.map((node, index) => {
+                const body = clean(node.querySelector("[node-type='feed_list_content'], .txt, [class*='feed_list_content']")?.innerText || "");
+                const normalizedBody = normalizeText(body);
+                const author = clean(node.querySelector("a[namecard], .name, [class*='name']")?.textContent || "");
+                const bodyMatches = normalizedBody.includes(targetPrefix) || normalizedBody.startsWith(targetPrefix.slice(0, 48));
+                const expectedAuthor = normalizeName(args.author);
+                const liveAuthor = normalizeName(author);
+                const authorMatches = !expectedAuthor || !liveAuthor || expectedAuthor === liveAuthor;
+                return { index, bodyMatches, authorMatches, bodyLength: normalizedBody.length };
+              }).filter((item) => item.bodyMatches && item.authorMatches && item.bodyLength >= 48).map((item) => item.index);
+            }, { identity: expectedBody, author: String(card.author || "").trim() }).catch(() => []);
+            // Result indices captured while scrolling become stale. Match the
+            // actual post body (and author when available) in the live DOM and
+            // require a unique match before pairing its text with a screenshot.
+            if (matchingIndexes.length !== 1) { skip(matchingIndexes.length ? "weibo_ambiguous_post_match" : "weibo_post_text_not_found"); continue; }
+            openedDetails += 1;
+            syncProgress("reading");
+            const matchedIndex = matchingIndexes[0];
+            weiboCard = weiboCards.nth(matchedIndex);
+            await weiboCard.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+          }
+          const expectedFeedbackId = spec.id === "voiceOfUser" ? voiceFeedbackId(detailPage.url()) : "";
+          if (spec.id === "voiceOfUser" && !expectedFeedbackId && !voiceFeedbackId(voiceFeedbackLink)) { skip("feedback_id_missing_after_card_click"); continue; }
+          const voiceDetail = spec.id === "voiceOfUser"
+            ? await waitForVoiceFeedbackDetail(detailPage, card.identityText || card.text, expectedFeedbackId || voiceFeedbackId(voiceFeedbackLink))
+            : null;
+          if (spec.id === "voiceOfUser" && !voiceDetail) { skip("voice_detail_content_not_matched"); continue; }
+          let detail = spec.id === "weibo"
+            ? await weiboCard.innerText({ timeout: 5000 }).catch(() => card.text)
+            : spec.id === "voiceOfUser" ? voiceDetail.text : await detailPage.locator("body").innerText({ timeout: 5000 }).catch(() => "");
+          if (!detail.trim() || spec.loginPattern.test(detail) || detail.length < 80) { skip("detail_text_empty_or_login"); continue; }
+          let rawComments = [];
+          if (spec.id === "weibo") {
+            // A Weibo post's detail is already the expanded feed card; there is
+            // no second detail page. Open the comment thread from its action row.
+            if (!weiboCardIsBody) {
+              await expandWeiboComments(detailPage, weiboCard);
+              detail = await weiboCard.innerText({ timeout: 5000 }).catch(() => detail);
+              rawComments = await readWeiboComments(detailPage, weiboCard);
+            }
+          }
+          const postTags = extractHashtags(card.title, card.text, detail);
+          if (!matchesResearchTerms(task.project, query, card.title, card.text, detail, postTags)) { skip("research_keyword_not_found"); continue; }
+          const date = normalizedPostDate(detail);
+          if (!isWithinFeedbackDateRange(detail, task.project)) { skip("post_date_missing_or_out_of_range"); continue; }
+          const screenshot = spec.id === "weibo"
+            ? await weiboCard.screenshot({ type: "png" }).catch(() => null)
+            : spec.id === "voiceOfUser" ? voiceDetail.screenshot : await detailPage.screenshot({ type: "png" }).catch(() => null);
+          if (!screenshot) { skip("screenshot_failed"); continue; }
+          if (spec.id === "voiceOfUser") {
+            rawComments = await detailPage.locator("[class*='voice'], [class*='reply'], [class*='feedback'], [class*='comment']").allTextContents().then((items) => items.map((item) => item.replace(/\s+/g, " ").trim()).filter((item) => item.length >= 8 && item.length <= 500).slice(0, 8)).catch(() => []);
+          } else if (spec.id !== "weibo") {
+            rawComments = await detailPage.locator("[class*='comment'], [class*='reply'], [class*='feedback']").allTextContents().then((items) => items.map((item) => item.replace(/\s+/g, " ").trim()).filter((item) => item.length >= 12 && item.length <= 320).slice(0, 8)).catch(() => []);
+          }
+          const distilled = await agent.summarizeCandidate({ title: card.title, text: detail, comments: rawComments, query, projectContext: `项目目标：${projectWords(task.project).join("、")}` }).catch(() => null);
+          const candidateUrl = spec.id === "voiceOfUser" && voiceFeedbackId(voiceFeedbackLink) && !voiceFeedbackId(detailPage.url())
+            ? voiceFeedbackLink : detailPage.url();
+          const voiceDetailUrl = spec.id === "voiceOfUser"
+            ? voiceFeedbackId(candidateUrl) ? canonicalVoiceDetailUrl(candidateUrl) : ""
+            : "";
+          if (spec.id === "voiceOfUser" && (!voiceDetailUrl || !voiceFeedbackId(candidateUrl))) { skip("voice_permalink_missing"); continue; }
+          // Keep only the post's own visible text as its identity. The detail
+          // page body can contain surrounding results/navigation, and AI
+          // summaries are intentionally not stable enough for deduplication.
+          const identityText = String(card.identityText || card.text || "").trim();
+          const screenshotHash = createHash("sha256").update(screenshot).digest("hex");
+          const dedupeKey = spec.id === "voiceOfUser" && voiceDetailUrl
+            ? `url:${voiceDetailUrl}`
+            : `content:${spec.id}:${createHash("sha256").update(canonicalPostText(`${card.author || ""} ${identityText}`)).digest("hex")}`;
+          // Keep the real detail URL (including JD's case-sensitive
+          // `feedbackId` parameter) for the visible source link. Use the
+          // stripped canonical URL only as the dedupe identity.
+          const sourceUrl = spec.id === "voiceOfUser"
+            ? candidateUrl
+            : spec.id === "weibo" ? (weiboSourceUrl || card.sourceUrl || candidateUrl || card.url)
+              : card.sourceUrl || candidateUrl || card.url;
+          const savedResponse = await api(`/api/research/tasks/${task.id}/candidates`, { method: "POST", body: JSON.stringify({ candidates: [{
+            id: `candidate-${spec.id}-${createHash("sha1").update(dedupeKey || identityKey).digest("hex").slice(0, 12)}`,
+            source: spec.source, title: String(distilled?.insightTitle || card.title).slice(0, 120), url: sourceUrl, author: card.author || spec.name, publishedAt: date || null,
+            capturedAt: new Date().toISOString(), excerpt: String(distilled?.summary || detail.replace(/\s+/g, " ").slice(0, 500)), screenshotBase64: screenshot.toString("base64"),
+            mediaType: "community_post", keywords: [query, spec.name], valuableComments: Array.isArray(distilled?.comments) ? distilled.comments.slice(0, 8) : rawComments, relevance: relevance(detail, task.project, query),
+            identityText, dedupeKey, screenshotHash,
+          }] }) });
+          const saveResult = await savedResponse.json().catch(() => ({}));
+          const actuallySaved = Number(saveResult.saved || 0);
+          eligible += 1;
+          if (!actuallySaved) skip(savedResponse.ok ? "duplicate_in_database" : "save_request_rejected");
+          saved += actuallySaved;
+          syncProgress("reading");
+          activity.detailCount = Number(activity.detailCount || 0) + actuallySaved;
+          await updateTask(task.id, "running", activity);
+        } finally {
+          if (weiboDetailPopup) await weiboDetailPopup.close().catch(() => {});
+          if (spec.id === "voiceOfUser" && voiceOpened) {
+            const closed = await closeVoiceOfUserDetail(resultsPage, detailPage, voicePopup, voiceOriginalUrl);
+            if (!closed) throw new Error("用户之声详情未能关闭，已停止该平台采集以避免在遮挡的结果列表上继续操作。");
+          }
+          syncProgress("reading");
+          await updateTask(task.id, "running", activity);
+        }
+      }
+    }
+    activity.sourceProgress[spec.id] = { ...activity.sourceProgress[spec.id], phase: "completed", progress: 100, browsed, reviewed, opened: openedDetails, eligible, saved, skipped: { ...skipped } };
+    if (saved === 0) activity.message = `${spec.name}本轮没有保存案例：${Object.entries(skipped).map(([reason, count]) => `${reason} ${count}`).join("；") || "没有找到可采集的帖子"}`;
+    await updateTask(task.id, "running", activity);
+    return saved;
+  } catch (error) {
+    if (error instanceof LoginRequiredError) holdForLogin = true;
+    throw error;
+  } finally {
+    if (holdForLogin) await page.bringToFront().catch(() => {});
+    // Keep the platform tabs available for the user and for the next research stage.
   }
 }
 
@@ -262,7 +1434,7 @@ async function collectVisibleCards(page) {
   });
 }
 
-async function searchCandidates(page, query, agent) {
+async function searchCandidates(page, query, agent, onVisibleCards = null) {
   await page.goto("https://www.xiaohongshu.com/explore", { waitUntil: "commit", timeout: 15000 });
   await page.locator("body").waitFor({ state: "visible", timeout: 15000 });
   await page.waitForTimeout(1200);
@@ -343,13 +1515,22 @@ async function searchCandidates(page, query, agent) {
     await pageGuard(page);
     throw new Error("搜索按钮和 Enter 都没有进入搜索结果页");
   }
-  await page.waitForTimeout(1800);
   await pageGuard(page);
   const url = page.url();
+  const rightPanelEvidence = await collectDynamicRightPanel(page).catch(() => ({ recommendations: [], text: "", screenshots: [] }));
 
   const collected = new Map();
-  for (const card of await collectVisibleCards(page)) collected.set(card.id, card);
-  return { url, cards: [...collected.values()] };
+  for (let scroll = 0; scroll <= 10; scroll += 1) {
+    const visibleCards = await collectVisibleCards(page);
+    for (const card of visibleCards) collected.set(card.id, card);
+    const stop = onVisibleCards ? await onVisibleCards(visibleCards, url) : false;
+    if (stop) break;
+    if ((!onVisibleCards && collected.size >= maxCandidates * 3) || scroll === 10) break;
+    await page.mouse.wheel(0, 900);
+    await page.waitForTimeout(650);
+    await pageGuard(page);
+  }
+  return { url, cards: [...collected.values()], ...rightPanelEvidence };
 }
 
 async function detailRoot(page) {
@@ -414,14 +1595,12 @@ async function collectValuableComments(page, agent) {
     .slice(0, 8);
 }
 
-async function openCandidate(page, card, searchUrl, project, query, agent) {
+async function openCandidate(page, card, project, query, agent) {
   if (!page.url().includes("/search_result")) {
     throw new Error("当前页面已经离开搜索结果页");
   }
   const target = page.locator(`a[href*="${card.id}"]`).filter({ visible: true }).first();
-  if (!await target.isVisible().catch(() => false)) {
-    throw new Error("候选卡片已离开当前可视区域");
-  }
+  if (!await target.count().catch(() => 0)) throw new Error("候选卡片已离开当前结果区域，跳过；不会通过帖子链接打开。");
   await target.scrollIntoViewIfNeeded({ timeout: 5000 });
   await target.click({ timeout: 8000 });
   let detailOpened = await page.waitForFunction(() => {
@@ -434,7 +1613,7 @@ async function openCandidate(page, card, searchUrl, project, query, agent) {
       const rect = root.getBoundingClientRect();
       return rect.width > 320 && rect.height > 240 && (root.innerText || "").trim().length > 40;
     });
-  }, null, { timeout: 15000 }).then(() => true).catch(() => false);
+  }, null, { timeout: 5000 }).then(() => true).catch(() => false);
   if (!detailOpened) {
     await agentRecovery(agent, page, {
       goal: `打开候选帖子「${card.title}」的真实详情弹层`,
@@ -480,7 +1659,7 @@ async function openCandidate(page, card, searchUrl, project, query, agent) {
   const likes = metric((text.match(/([\d.万]+)\s*赞/) || [])[1]);
   const comments = metric((text.match(/([\d.万]+)\s*(?:评论|评)/) || [])[1]);
   const collects = metric((text.match(/([\d.万]+)\s*收藏/) || [])[1]);
-  const date = text.match(/20\d{2}[-./年]\d{1,2}(?:[-./月]\d{1,2})?/)?.[0] || "";
+  const date = normalizedPostDate(text);
 
   await page.keyboard.press("Escape");
   await page.waitForTimeout(450);
@@ -512,29 +1691,31 @@ async function openCandidate(page, card, searchUrl, project, query, agent) {
     likes,
     comments,
     collects,
-    relevance: relevance(`${title} ${text}`, project, query),
+    relevance: matchesResearchTerms(project, query, title, text, card.cardText, extractHashtags(title, text, card.cardText)) ? 99 : relevance(`${title} ${text} ${card.cardText}`, project, query),
+    matchText: text,
+    matchTags: extractHashtags(title, text, card.cardText),
   };
 }
 
 function buildVisualQueries(selection, directions) {
   const forbidden = /\b(?:game|gaming|gamified|campaign|interactive|engagement|retention)\b|游戏|养成|收集|抽奖|答题|任务|闯关|合成|互动/gi;
   const selected = Array.isArray(selection?.trends) ? selection.trends : [];
+  if (!Array.isArray(directions) || !directions.length || selected.length !== directions.length) {
+    throw new Error("AI 未能为每个已确认视觉方向生成搜索词，请重新生成搜索词后再采集");
+  }
   const normalized = selected.map((trend, index) => ({
     key: `official-${index + 1}`,
-    label: String(trend.label || "").trim(),
-    queries: (Array.isArray(trend.searchTerms) ? trend.searchTerms : [])
+    label: String(directions[index]?.label || "").trim(),
+    queries: [...new Set((Array.isArray(trend.searchTerms) ? trend.searchTerms : [])
       .map((term) => String(term).replace(forbidden, " ").replace(/[^a-z0-9\s-]/gi, " ").replace(/\s+/g, " ").trim())
       .filter((term) => term.split(/\s+/).length >= 2 && term.split(/\s+/).length <= 4)
-      .slice(0, 3),
+    )].slice(0, 5),
     reports: Array.isArray(directions?.[index]?.sourceNames) ? directions[index].sourceNames.filter(Boolean) : [],
     rationale: String(directions?.[index]?.rationale || "").trim().slice(0, 160),
-  })).filter((trend) => trend.label && trend.queries.length >= 2);
-  return normalized.length === directions?.length ? normalized : visualTrendCandidates.slice(0, directions?.length || 4).map((trend, index) => ({
-    ...trend,
-    label: directions?.[index]?.label || trend.label,
-    reports: directions?.[index]?.sourceNames || trend.reports,
-    rationale: directions?.[index]?.rationale || "该方向由竞品视觉特征与官方趋势交叉确认。",
   }));
+  const invalid = normalized.find((trend) => !trend.label || trend.queries.length !== 5);
+  if (invalid) throw new Error(`视觉方向“${invalid.label || "未命名"}”没有得到5组有效且不重复的英文搜索词，请重新生成搜索词后再采集`);
+  return normalized;
 }
 
 async function readSources(context, sources) {
@@ -558,7 +1739,7 @@ async function readSources(context, sources) {
 async function collectVisualCards(page, platform) {
   const selector = visualPlatformSpecs[platform].selector;
   const found = new Map();
-  const scrollLimit = platform === "pinterest" ? 14 : 8;
+  const scrollLimit = platform === "pinterest" ? 15 : 10;
   for (let step = 0; step < scrollLimit; step += 1) {
     const visible = await page.locator(selector).evaluateAll((anchors) => {
       const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
@@ -578,12 +1759,28 @@ async function collectVisualCards(page, platform) {
       }).filter(Boolean);
     }).catch(() => []);
     for (const card of visible) if (!found.has(card.url)) found.set(card.url, card);
-    if (found.size >= visualDetailsPerTrend + 20) break;
+    if (found.size >= visualCardsPerSearch) break;
     await page.keyboard.press("Escape").catch(() => {});
     await page.mouse.wheel(0, platform === "pinterest" ? 1150 : 850);
     await page.waitForTimeout(platform === "pinterest" ? 900 : 650);
   }
-  return [...found.values()].slice(0, 60);
+  return [...found.values()].slice(0, visualCardsPerSearch);
+}
+
+async function waitForVisualDetail(page, platform) {
+  const settleMs = platform === "pinterest" ? 5000 : 4000;
+  const contentTimeoutMs = platform === "pinterest" ? 15000 : 12000;
+  await page.waitForTimeout(settleMs);
+  return page.waitForFunction((site) => {
+    const text = document.body?.innerText?.trim() || "";
+    const heading = document.querySelector("h1")?.textContent?.trim() || "";
+    const hasLoadedLargeImage = [...document.images].some((image) => {
+      const rect = image.getBoundingClientRect();
+      return image.complete && image.naturalWidth >= 240 && rect.width >= 240 && rect.height >= 180;
+    });
+    if (site === "pinterest") return text.length >= 80 && (heading.length > 0 || hasLoadedLargeImage);
+    return text.length >= 80 && heading.length > 0 && hasLoadedLargeImage;
+  }, platform, { timeout: contentTimeoutMs }).then(() => true).catch(() => false);
 }
 
 async function collectVisualPlatform(context, task, platform, queries, agent, activity) {
@@ -595,16 +1792,12 @@ async function collectVisualPlatform(context, task, platform, queries, agent, ac
   const maxReviewsPerTrend = Math.max(visualDetailsPerTrend, Math.ceil(visualDetailsPerPlatform / Math.max(1, queries.length)));
   const detailTarget = visualDetailsPerPlatform;
   try {
-    for (let queryIndex = 0; queryIndex < queries.length && reviewed < visualDetailsPerPlatform; queryIndex += 1) {
+    for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
       const candidateTrend = queries[queryIndex];
       const baseTerms = candidateTrend.queries || [candidateTrend.query];
-      const searchTerms = platform === "pinterest"
-        ? [...new Set([...baseTerms, candidateTrend.label, `${candidateTrend.label} design`].filter(Boolean))]
-        : baseTerms;
+      const searchTerms = baseTerms;
       let trendReviewed = 0;
       for (const query of searchTerms) {
-      const eligibleForTrend = () => evaluated.filter((item) => item.trendKey === candidateTrend.key).length;
-      if (trendReviewed >= maxReviewsPerTrend || reviewed >= visualDetailsPerPlatform) break;
       const url = visualPlatformSpecs[platform].search(query);
       activity.sourceProgress[platform] = {
         phase: "searching", progress: Math.round((queryIndex / queries.length) * 100),
@@ -613,11 +1806,11 @@ async function collectVisualPlatform(context, task, platform, queries, agent, ac
       Object.assign(activity, {
         phase: "visual_searching",
         currentQuery: query,
-        message: "Behance、Pinterest 与花瓣正在同步研究",
+        message: "Behance 与 Pinterest 正在同步研究",
       });
       await updateTask(task.id, "running", activity);
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
-      await page.waitForTimeout(1800);
+      await page.waitForTimeout(platform === "pinterest" ? 3500 : 2500);
       const cards = await collectVisualCards(page, platform);
       browsed += cards.length;
       activity.sourceProgress[platform].browsed = browsed;
@@ -633,11 +1826,22 @@ async function collectVisualPlatform(context, task, platform, queries, agent, ac
         };
         await updateTask(task.id, "running", activity);
         await page.goto(card.url, { waitUntil: "domcontentloaded", timeout: 20000 });
-        await page.waitForTimeout(1600);
         const detailPath = new URL(page.url()).pathname;
         const validDetail = detailPath.includes(visualPlatformSpecs[platform].detailPath);
         if (!validDetail) {
           await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
+          continue;
+        }
+        let detailReady = await waitForVisualDetail(page, platform);
+        if (!detailReady) {
+          console.warn(`${platform}详情内容等待超时，刷新后重试：${card.url}`);
+          await page.reload({ waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
+          detailReady = await waitForVisualDetail(page, platform);
+        }
+        if (!detailReady) {
+          console.warn(`${platform}详情页未加载出可用内容，跳过：${card.url}`);
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
+          await page.waitForTimeout(1000);
           continue;
         }
         if (platform === "behance") {
@@ -665,6 +1869,9 @@ async function collectVisualPlatform(context, task, platform, queries, agent, ac
           ? await page.locator("img").nth(imageCandidate.index).screenshot({ type: "jpeg", quality: 76, animations: "disabled" }).catch(() => null)
           : await page.screenshot({ type: "jpeg", quality: 68, fullPage: false, animations: "disabled" }).catch(() => null);
         if (!screenshot) continue;
+        activity.sourceProgress[platform].phase = "analyzing";
+        Object.assign(activity, { phase: "visual_analysis", message: "正在识别视觉特征并筛选高相关参考图" });
+        await updateTask(task.id, "running", activity);
         const analysis = await agent.analyzeVisualSample({
           screenshot, platform, title: detailTitle || card.title, query,
           directionLabel: candidateTrend.label,
@@ -674,7 +1881,7 @@ async function collectVisualPlatform(context, task, platform, queries, agent, ac
             console.warn(`${platform}视觉样本分析失败：${error.message}`);
             return null;
           });
-        if (analysis?.useful && analysis.trendLabel && Array.isArray(analysis.visualFeatures)) {
+        if (analysis?.useful) {
           const date = bodyText.match(/20\d{2}[-./年]\d{1,2}(?:[-./月]\d{1,2})?/)?.[0] || null;
           const engagement = metric(bodyText.match(/([\d.万]+)\s*(?:赞|likes?|appreciations?|saves?)/i)?.[1]);
           const mapped = candidateTrend;
@@ -687,14 +1894,13 @@ async function collectVisualPlatform(context, task, platform, queries, agent, ac
             author: null,
             publishedAt: date,
             trendLabel: mapped?.label || analysis.trendLabel,
-            visualFeatures: analysis.visualFeatures,
+            visualFeatures: Array.isArray(analysis.visualFeatures) ? analysis.visualFeatures : [],
             engagement,
             authorityTags: mapped?.reports || [],
             gameFit: 0,
             visualQuality: 0,
             analysisReason: analysis.reason,
             selectionReason: mapped?.rationale || "该方向来自本次官方视觉趋势候选，需结合项目目标继续验证。",
-            referenceType: analysis.referenceType === "execution" ? "execution" : "inspiration",
             relevanceScore: Math.max(0, Math.min(100, Number(analysis.relevanceScore || 0))),
             screenshotBase64: screenshot.toString("base64"),
           });
@@ -702,7 +1908,7 @@ async function collectVisualPlatform(context, task, platform, queries, agent, ac
           activity.sourceProgress[platform].eligible = evaluated.length;
         }
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
-        await page.waitForTimeout(700);
+        await page.waitForTimeout(platform === "pinterest" ? 1200 : 900);
         await updateTask(task.id, "running", activity);
       }
       }
@@ -731,26 +1937,16 @@ function visuallySimilar(left, right) {
   return overlap / Math.min(a.size, b.size) >= 0.72;
 }
 
-function selectBestVisualSamples(samples, queries, platforms) {
+function selectBestVisualSamples(samples, queries) {
   return queries.flatMap((trend) => {
     const ranked = samples.filter((sample) => sample.trendKey === trend.key)
       .sort((a, b) => (b.relevanceScore - a.relevanceScore) || (b.engagement - a.engagement));
     const selected = [];
-    const take = (type, limit) => {
-      while (selected.filter((item) => item.referenceType === type).length < limit) {
-        let added = false;
-        for (const platform of platforms) {
-          const sample = ranked.find((item) => item.referenceType === type && item.platform === platform && !selected.some((chosen) => chosen.projectUrl === item.projectUrl || visuallySimilar(chosen, item)));
-          if (!sample) continue;
-          selected.push(sample);
-          added = true;
-          if (selected.filter((item) => item.referenceType === type).length >= limit) break;
-        }
-        if (!added) break;
-      }
-    };
-    take("inspiration", 5);
-    take("execution", 5);
+    for (const sample of ranked) {
+      if (selected.length >= visualSamplesPerTrend) break;
+      if (selected.some((chosen) => chosen.projectUrl === sample.projectUrl || visuallySimilar(chosen, sample))) continue;
+      selected.push(sample);
+    }
     return selected.slice(0, visualSamplesPerTrend);
   });
 }
@@ -759,30 +1955,93 @@ async function collectXiaohongshuVisual(page, task, agent, activity) {
   const seen = new Set();
   const imageHashes = new Set();
   const samples = [];
-  const discoveryEvidence = [];
-  const discoveryQueries = buildCompetitorDiscoveryQueries(task.project);
-  Object.assign(activity, { phase: "xhs_competitor_discovery", message: "正在识别当前互动类型的主要竞品" });
-  for (let index = 0; index < discoveryQueries.length; index += 1) {
-    const query = discoveryQueries[index];
-    activity.sourceProgress.xiaohongshuVisual = {
-      phase: "discovering_competitors", progress: Math.round((index / Math.max(1, discoveryQueries.length + 1)) * 25),
-      queryIndex: index + 1, queryTotal: discoveryQueries.length, browsed: seen.size, saved: samples.length,
-    };
-    await updateTask(task.id, "running", activity);
-    const result = await searchCandidates(page, query, agent);
-    discoveryEvidence.push(...result.cards.slice(0, 12).map((card) => ({ title: card.title, text: card.text, url: card.url, query })));
-  }
-  const discovered = await agent.discoverInteractionCompetitors({
-    projectContext: task.project,
-    searchEvidence: discoveryEvidence,
-  }).catch((error) => {
-    console.warn(`竞品识别失败：${error.message}`);
+  let competitors = task.activity?.visualCompetitorsConfirmed && Array.isArray(task.activity?.visualCompetitors)
+    ? task.activity.visualCompetitors.filter((item) => item?.name?.trim()).map((item) => ({ ...item, name: item.name.trim() }))
+    : [];
+  if (!task.activity?.visualCompetitorsConfirmed) {
+    const discoveryEvidence = [];
+    const discoveryQueries = buildCompetitorDiscoveryQueries(task.project);
+    Object.assign(activity, { phase: "xhs_competitor_discovery", message: "正在读取搜索结果并提取竞品候选" });
+    for (let index = 0; index < discoveryQueries.length; index += 1) {
+      const query = discoveryQueries[index];
+      activity.currentQuery = query;
+      activity.sourceProgress.xiaohongshuVisual = {
+        phase: "discovering_competitors", progress: Math.round((index / Math.max(1, discoveryQueries.length + 1)) * 25),
+        queryIndex: index + 1, queryTotal: discoveryQueries.length, browsed: seen.size, saved: samples.length,
+      };
+      await updateTask(task.id, "running", activity);
+      const result = await searchCandidates(page, query, agent);
+      discoveryEvidence.push({
+        query, resultUrl: result.url, rightPanelRecommendations: result.recommendations,
+        rightPanelText: result.text, rightPanelScreenshots: result.screenshots || [],
+      });
+    }
+    const panelText = discoveryEvidence.map((item) => item.rightPanelText || "").filter(Boolean).join("\n\n").slice(0, 24000);
+    const panelScreenshots = discoveryEvidence.flatMap((item) => item.rightPanelScreenshots || []).slice(0, 5)
+      .map((encoded) => Buffer.from(encoded, "base64"));
+    let visionCandidates = [];
+    if (panelScreenshots.length && agent?.enabled && agent.remainingCalls > 0) {
+      try {
+        const recommendationEvidence = discoveryEvidence.flatMap((item) => item.rightPanelRecommendations || [])
+          .filter((item) => item.fromRecommendationCard && item.name)
+          .map((item) => `${item.name}${item.context ? `：${item.context}` : ""}`)
+          .join("\n").slice(0, 4000);
+        const result = await agent.extractVisualCompetitors({
+          screenshots: panelScreenshots,
+          panelText: recommendationEvidence,
+          query: discoveryQueries.join(" / "),
+          projectContext: task.project?.answers?.game?.[0] || task.project?.customValues?.game || "",
+        });
+        visionCandidates = Array.isArray(result?.competitors) ? result.competitors
+          .map((item) => ({ name: String(item.name || "").trim(), reason: item.evidence || "截图文字识别" }))
+          .filter((item) => item.name) : [];
+      } catch (error) {
+        console.warn(`竞品推荐面板截图识别失败，保留DOM与用户确认：${error.message}`);
+      }
+    }
+    const extractedCompetitors = [
+      // Only accept DOM candidates tied to a recommendation card (the parser
+      // anchors these rows to their recommendation badge), never arbitrary
+      // blue links or colon-delimited prose from the full AI panel.
+      ...discoveryEvidence.flatMap((item) => item.rightPanelRecommendations || [])
+        .filter((item) => item.name && item.fromRecommendationCard)
+        .map((item) => ({ name: item.name, reason: item.context || "来自右侧推荐卡片标题", source: "推荐卡片" })),
+      ...visionCandidates.map((item) => ({ ...item, source: "截图识别" })),
+    ];
+    const nonCompetitorLabels = /^(核心竞品盘点|划定对标范围|竞品盘点|推荐理由|分析重点|三层拆解法|游戏类|工具类|核心玩法|表层|中层|深层|点点(?:\s*ai)?|问点点|查看详情|更多|展开|收起)$/i;
+    competitors = extractedCompetitors
+      .map((item) => ({ ...item, name: String(item.name || "").replace(/[º°⁰¹²³⁴⁵⁶⁷⁸⁹]+$/g, "").trim() }))
+      .filter((item, index, all) => item.name.length >= 2 && item.name.length <= 32 && !nonCompetitorLabels.test(item.name)
+        && all.findIndex((other) => other.name.toLowerCase() === item.name.toLowerCase()) === index)
+      .slice(0, 12);
+    let panelScreenshotCount = 0;
+    if (panelScreenshots.length) {
+      try {
+        const response = await api(`/api/research/tasks/${task.id}/competitor-panel`, {
+          method: "POST",
+          body: JSON.stringify({ screenshotsBase64: panelScreenshots.map((screenshot) => screenshot.toString("base64")) }),
+        });
+        panelScreenshotCount = Number((await response.json()).count || 0);
+      } catch (error) {
+        console.warn(`保存竞品推荐面板截图失败，继续使用文字证据：${error.message}`);
+      }
+    }
+    activity.visualCompetitors = competitors;
+    activity.visualCompetitorPanelText = panelText;
+    activity.visualCompetitorPanelScreenshotCount = panelScreenshotCount;
+    activity.visualCompetitorScreenshotCount = panelScreenshots.length;
+    activity.visualCompetitorExtractionNeedsReview = competitors.length === 0;
+    activity.visualCompetitorsConfirmed = false;
+    activity.competitorDiscoveryQuery = discoveryQueries[0];
+    activity.sourceProgress.xiaohongshuVisual = { ...activity.sourceProgress.xiaohongshuVisual, phase: "awaiting_competitor_confirmation", progress: 25, queryIndex: 0, queryTotal: competitors.length };
+    Object.assign(activity, {
+      phase: "awaiting_competitor_confirmation",
+      message: competitors.length ? "请确认要逐个搜索的竞品名称" : "未能可靠提取竞品名称，请查看面板证据并手动补充",
+    });
+    await updateTask(task.id, "awaiting_competitor_confirmation", activity);
     return null;
-  });
-  const competitors = (Array.isArray(discovered?.competitors) ? discovered.competitors : [])
-    .map((item) => ({ name: String(item?.name || "").trim(), reason: String(item?.reason || "").trim() }))
-    .filter((item, index, all) => item.name && all.findIndex((other) => other.name.toLowerCase() === item.name.toLowerCase()) === index)
-    .slice(0, 4);
+  }
+  if (!competitors.length) throw new Error("请至少选择或添加一个竞品名称后继续");
   activity.visualCompetitors = competitors;
   activity.sourceProgress.xiaohongshuVisual = {
     ...activity.sourceProgress.xiaohongshuVisual,
@@ -795,8 +2054,9 @@ async function collectXiaohongshuVisual(page, task, agent, activity) {
 
   for (let index = 0; index < competitors.length; index += 1) {
     const competitor = competitors[index];
-    const query = `${competitor.name} 视觉设计`;
+    const query = competitor.name;
     let competitorSaved = 0;
+    let detailsViewedThisQuery = 0;
     Object.assign(activity, {
       phase: "xhs_visual_searching",
       currentQuery: query,
@@ -809,46 +2069,59 @@ async function collectXiaohongshuVisual(page, task, agent, activity) {
       queryIndex: index + 1,
       queryTotal: competitors.length,
       browsed: seen.size,
+      reviewed: detailsViewedThisQuery,
       saved: samples.length,
     };
     await updateTask(task.id, "running", activity);
-    const result = await searchCandidates(page, query, agent);
-    for (const card of result.cards) {
-      if (competitorSaved >= 5 || seen.has(identity(card.url))) continue;
-      seen.add(identity(card.url));
-      try {
-        const candidate = await openCandidate(page, card, result.url, task.project, query, agent);
-        const screenshot = Buffer.from(candidate.screenshotBase64, "base64");
-        const imageHash = createHash("sha256").update(screenshot).digest("hex");
-        if (imageHashes.has(imageHash)) continue;
-        const analysis = await agent.analyzeVisualSample({ screenshot, platform: "xiaohongshu", title: candidate.title, query });
-        if (!analysis?.useful || !analysis.trendLabel || !Array.isArray(analysis.visualFeatures)) continue;
-        imageHashes.add(imageHash);
-        const visualCandidate = {
-          ...candidate,
-          id: `visual-${candidate.id}`,
-          source: "xiaohongshu_visual",
-          excerpt: String(analysis.reason || candidate.excerpt || "").slice(0, 500),
-          keywords: [competitor.name, ...analysis.visualFeatures.slice(0, 6)],
-          valuableComments: [],
-        };
-        await api(`/api/research/tasks/${task.id}/candidates`, {
-          method: "POST", body: JSON.stringify({ candidates: [visualCandidate] }),
-        });
-        samples.push({
-          id: visualCandidate.id, title: candidate.title, url: candidate.url,
-          competitor: competitor.name,
-          trendLabel: analysis.trendLabel, visualFeatures: analysis.visualFeatures,
-          reason: analysis.reason,
-        });
-        competitorSaved += 1;
-        activity.sourceProgress.xiaohongshuVisual.saved = samples.length;
-        await updateTask(task.id, "running", activity);
-      } catch (error) {
-        if (error instanceof LoginRequiredError || error instanceof RateLimitedError) throw error;
-        console.warn(`跳过小红书视觉案例 ${card.title}: ${error.message}`);
+    const processedThisQuery = new Set();
+    await searchCandidates(page, query, agent, async (visibleCards) => {
+      for (const card of visibleCards) {
+        const key = identity(card.url);
+        if (competitorSaved >= 5 || detailsViewedThisQuery >= visualCompetitorDetailsPerQuery) return true;
+        if (processedThisQuery.has(key) || seen.has(key)) continue;
+        processedThisQuery.add(key);
+        seen.add(key);
+        try {
+          detailsViewedThisQuery += 1;
+          activity.sourceProgress.xiaohongshuVisual = {
+            ...activity.sourceProgress.xiaohongshuVisual,
+            reviewed: detailsViewedThisQuery,
+            currentTitle: card.title,
+          };
+          await updateTask(task.id, "running", activity);
+          const candidate = await openCandidate(page, card, task.project, query, agent);
+          const screenshot = Buffer.from(candidate.screenshotBase64, "base64");
+          const imageHash = createHash("sha256").update(screenshot).digest("hex");
+          if (imageHashes.has(imageHash)) continue;
+          const analysis = await agent.analyzeVisualSample({ screenshot, platform: "xiaohongshu", title: candidate.title, query }).catch(() => null);
+          imageHashes.add(imageHash);
+          const visualCandidate = {
+            ...candidate,
+            id: `visual-${candidate.id}`,
+            source: "xiaohongshu_visual",
+            excerpt: String(analysis?.reason || candidate.excerpt || "").slice(0, 500),
+            keywords: [competitor.name, ...(Array.isArray(analysis?.visualFeatures) ? analysis.visualFeatures.slice(0, 6) : [])],
+            valuableComments: [],
+          };
+          await api(`/api/research/tasks/${task.id}/candidates`, {
+            method: "POST", body: JSON.stringify({ candidates: [visualCandidate] }),
+          });
+          samples.push({
+            id: visualCandidate.id, title: candidate.title, url: candidate.url,
+            competitor: competitor.name,
+            trendLabel: analysis?.trendLabel || "待归类", visualFeatures: Array.isArray(analysis?.visualFeatures) ? analysis.visualFeatures : [],
+            reason: analysis?.reason || "已保留清晰且不重复的竞品截图，等待视觉归类。",
+          });
+          competitorSaved += 1;
+          activity.sourceProgress.xiaohongshuVisual.saved = samples.length;
+          await updateTask(task.id, "running", activity);
+        } catch (error) {
+          if (error instanceof LoginRequiredError || error instanceof RateLimitedError) throw error;
+          console.warn(`跳过小红书视觉案例 ${card.title}: ${error.message}`);
+        }
       }
-    }
+      return competitorSaved >= 5 || detailsViewedThisQuery >= visualCompetitorDetailsPerQuery;
+    });
   }
   activity.sourceProgress.xiaohongshuVisual = {
     ...activity.sourceProgress.xiaohongshuVisual, phase: "completed", progress: 100, browsed: seen.size, saved: samples.length,
@@ -860,7 +2133,7 @@ async function collectXiaohongshuVisual(page, task, agent, activity) {
 async function collectXiaohongshu(page, task, queries, agent, activity) {
   const seen = new Set();
   let saved = 0;
-  for (let index = 0; index < queries.length && saved < maxCandidates; index += 1) {
+  for (let index = 0; index < queries.length; index += 1) {
     const query = queries[index];
     activity.sourceProgress.xiaohongshu = {
       phase: "searching", progress: Math.round((index / queries.length) * 100),
@@ -872,46 +2145,60 @@ async function collectXiaohongshu(page, task, queries, agent, activity) {
       message: "三个平台正在同步研究",
     });
     await updateTask(task.id, "running", activity);
-    const result = await searchCandidates(page, query, agent);
+    const processedThisQuery = new Set();
+    let detailsViewedThisQuery = 0;
+    const result = await searchCandidates(page, query, agent, async (visibleCards) => {
+      for (const card of visibleCards) {
+        if (detailsViewedThisQuery >= 10) break;
+        const key = identity(card.url);
+        if (processedThisQuery.has(key) || seen.has(key)) continue;
+        processedThisQuery.add(key);
+        seen.add(key);
+        detailsViewedThisQuery += 1;
+        activity.sourceProgress.xiaohongshu = {
+          ...activity.sourceProgress.xiaohongshu,
+          phase: "reading",
+          progress: Math.min(94, Math.round(((index + 0.65) / queries.length) * 100)),
+          currentTitle: card.title,
+        };
+        activity.matchedCount = seen.size;
+        await updateTask(task.id, "running", activity);
+        try {
+          const candidate = await openCandidate(page, card, task.project, query, agent);
+          activity.sourceProgress.xiaohongshu.reviewed = Number(activity.sourceProgress.xiaohongshu.reviewed || 0) + 1;
+          await updateTask(task.id, "running", activity);
+          if (!matchesResearchTerms(task.project, query, candidate.title, candidate.excerpt, card.cardText, candidate.matchText, candidate.matchTags)) continue;
+          if (!isWithinFeedbackDateRange(candidate.publishedAt, task.project)) continue;
+          delete candidate.matchText;
+          delete candidate.matchTags;
+          if (task.project?.designType === "brand") candidate.source = "jd_feedback";
+          await api(`/api/research/tasks/${task.id}/candidates`, {
+            method: "POST",
+            body: JSON.stringify({ candidates: [candidate] }),
+          });
+          saved += 1;
+          activity.detailCount = saved;
+          activity.agentRecoveryCalls = agent.recoveryCalls;
+          activity.agentSummaryCalls = agent.summaryCalls;
+          activity.sourceProgress.xiaohongshu.saved = saved;
+          await updateTask(task.id, "running", activity);
+        } catch (error) {
+          if (error instanceof LoginRequiredError || error instanceof RateLimitedError) throw error;
+          console.warn(`[${task.id}] 跳过候选 ${card.title}: ${error.message}`);
+          activity.lastError = error.message;
+          await page.keyboard.press("Escape").catch(() => {});
+          await page.waitForTimeout(600);
+          if (!page.url().includes("/search_result")) {
+            await page.goBack({ waitUntil: "commit", timeout: 10000 }).catch(() => {});
+          }
+        }
+        await sleep(actionDelayMs);
+      }
+      return detailsViewedThisQuery >= 10;
+    });
     activity.browsedCount += result.cards.length;
     activity.sourceProgress.xiaohongshu.browsed = activity.browsedCount;
-
-    for (const card of result.cards.slice(0, maxPerQuery)) {
-      if (saved >= maxCandidates || seen.has(identity(card.url))) continue;
-      seen.add(identity(card.url));
-      activity.sourceProgress.xiaohongshu = {
-        ...activity.sourceProgress.xiaohongshu,
-        phase: "reading",
-        progress: Math.min(94, Math.round(((index + 0.65) / queries.length) * 100)),
-        currentTitle: card.title,
-      };
-      activity.matchedCount = seen.size;
-      await updateTask(task.id, "running", activity);
-      try {
-        const candidate = await openCandidate(page, card, result.url, task.project, query, agent);
-        if (task.project?.designType === "brand") candidate.source = "jd_feedback";
-        await api(`/api/research/tasks/${task.id}/candidates`, {
-          method: "POST",
-          body: JSON.stringify({ candidates: [candidate] }),
-        });
-        saved += 1;
-        activity.detailCount = saved;
-        activity.agentRecoveryCalls = agent.recoveryCalls;
-        activity.agentSummaryCalls = agent.summaryCalls;
-        activity.sourceProgress.xiaohongshu.saved = saved;
-        await updateTask(task.id, "running", activity);
-      } catch (error) {
-        if (error instanceof LoginRequiredError || error instanceof RateLimitedError) throw error;
-        console.warn(`[${task.id}] 跳过候选 ${card.title}: ${error.message}`);
-        activity.lastError = error.message;
-        await page.keyboard.press("Escape").catch(() => {});
-        await page.waitForTimeout(600);
-        if (!page.url().includes("/search_result")) {
-          await page.goBack({ waitUntil: "commit", timeout: 10000 }).catch(() => {});
-        }
-      }
-      await sleep(actionDelayMs);
-    }
+    await updateTask(task.id, "running", activity);
   }
   activity.sourceProgress.xiaohongshu = {
     ...activity.sourceProgress.xiaohongshu, phase: "completed", progress: 100, saved,
@@ -1020,41 +2307,113 @@ async function processTask(context, task) {
   const queries = buildQueries(task.project);
   const confirmedDirections = task.activity?.visualDirectionsConfirmed && Array.isArray(task.activity?.visualDirections)
     ? task.activity.visualDirections : null;
-  const activity = confirmedDirections ? { ...task.activity, sourceProgress: { ...(task.activity.sourceProgress || {}) } } : {
+  const confirmedCompetitors = task.activity?.visualCompetitorsConfirmed && Array.isArray(task.activity?.visualCompetitors)
+    ? task.activity.visualCompetitors : null;
+  const visualOnly = task.project?.researchMode === "visual";
+  const selectedFeedbackPlatforms = new Set(Array.isArray(task.project?.feedbackPlatforms) && task.project.feedbackPlatforms.length
+    ? task.project.feedbackPlatforms : gameplayPlatformSpecs.map((spec) => spec.id));
+  const activity = confirmedDirections || confirmedCompetitors || task.activity?.ignoredPlatforms?.length ? { ...task.activity, sourceProgress: { ...(task.activity.sourceProgress || {}) } } : {
     phase: "starting", queryIndex: 0, queryTotal: queries.length,
-    browsedCount: 0, matchedCount: 0, detailCount: 0, message: "正在准备小红书玩法案例研究",
-    sourceProgress: {
-      xiaohongshu: { phase: "queued", progress: 0, queryIndex: 0, queryTotal: queries.length, browsed: 0, saved: 0 },
-      xiaohongshuVisual: { phase: "queued", progress: 0, queryIndex: 0, queryTotal: 4, browsed: 0, saved: 0 },
-      officialTrends: { phase: "queued", progress: 0 },
-    },
+    browsedCount: 0, matchedCount: 0, detailCount: 0, message: visualOnly ? "正在准备视觉研究" : "正在准备所选平台的用户反馈研究",
+    visualOnly,
+    sourceProgress: visualOnly
+      ? {
+          xiaohongshuVisual: { phase: "queued", progress: 0, queryIndex: 0, queryTotal: 4, browsed: 0, saved: 0 },
+          officialTrends: { phase: "queued", progress: 0 },
+        }
+      : {
+          xiaohongshu: { phase: selectedFeedbackPlatforms.has("xiaohongshu") ? "queued" : "skipped", progress: selectedFeedbackPlatforms.has("xiaohongshu") ? 0 : 100, queryIndex: 0, queryTotal: queries.length, browsed: 0, saved: 0 },
+          weibo: { phase: selectedFeedbackPlatforms.has("weibo") ? "queued" : "skipped", progress: selectedFeedbackPlatforms.has("weibo") ? 0 : 100, queryIndex: 0, queryTotal: queries.length, saved: 0 },
+          voiceOfUser: { phase: selectedFeedbackPlatforms.has("voiceOfUser") ? "queued" : "skipped", progress: selectedFeedbackPlatforms.has("voiceOfUser") ? 0 : 100, queryIndex: 0, queryTotal: queries.length, saved: 0 },
+        },
   };
+  if (!visualOnly) activity.selectedFeedbackPlatforms = [...selectedFeedbackPlatforms];
 
   try {
     if (!confirmedDirections) {
       const xhsAgent = createResearchBrowserAgent();
-      const saved = await collectXiaohongshu(page, task, queries, xhsAgent, activity);
-      if (!saved) throw new Error("没有成功打开并保存玩法案例帖子");
-      if (task.project?.designType === "brand") await collectBrandStoreCases(context, task, activity);
+      if (!visualOnly) {
+        for (const spec of gameplayPlatformSpecs) {
+          if (!selectedFeedbackPlatforms.has(spec.id) && activity.sourceProgress[spec.id]) activity.sourceProgress[spec.id] = { ...activity.sourceProgress[spec.id], phase: "skipped", progress: 100 };
+        }
+        if (!await ensureGameplayPlatformLogins(context, task, activity)) return;
+        const weiboAgent = createResearchBrowserAgent();
+        const voiceOfUserAgent = createResearchBrowserAgent();
+        const ignored = new Set(activity.ignoredPlatforms || []);
+        for (const platformId of ignored) {
+          if (activity.sourceProgress[platformId]) activity.sourceProgress[platformId] = { ...activity.sourceProgress[platformId], phase: "skipped", progress: 100 };
+        }
+        let saved = 0;
+        let weiboSaved = 0;
+        let voiceSaved = 0;
+        const platformErrors = [];
+        const collectIndependently = async (platformId, label, collect) => {
+          try { return await collect(); }
+          catch (error) {
+            if (error instanceof RateLimitedError) throw error;
+            const message = String(error?.message || error);
+            platformErrors.push(`${label}：${message}`);
+            if (error instanceof LoginRequiredError) {
+              activity.loginRequiredPlatforms = [...new Set([...(activity.loginRequiredPlatforms || []), label])];
+            }
+            activity.sourceProgress[platformId] = {
+              ...activity.sourceProgress[platformId], phase: "failed", error: message,
+            };
+            activity.message = `${label}采集异常，继续采集其他平台`;
+            await updateTask(task.id, "running", activity);
+            console.warn(`${label}采集异常，已隔离并继续其他平台：${message}`);
+            return 0;
+          }
+        };
+        if (selectedFeedbackPlatforms.has("xiaohongshu") && !ignored.has("xiaohongshu")) saved = await collectIndependently("xiaohongshu", "小红书", () => collectXiaohongshu(page, task, queries, xhsAgent, activity));
+        if (selectedFeedbackPlatforms.has("weibo") && !ignored.has("weibo")) weiboSaved = await collectIndependently("weibo", "微博", () => collectCommunityPlatform(context, task, gameplayPlatformSpecs[1], queries, weiboAgent, activity));
+        if (selectedFeedbackPlatforms.has("voiceOfUser") && !ignored.has("voiceOfUser")) voiceSaved = await collectIndependently("voiceOfUser", "用户之声", () => collectCommunityPlatform(context, task, gameplayPlatformSpecs[2], queries, voiceOfUserAgent, activity));
+        if (!saved && !weiboSaved && !voiceSaved) {
+          const details = platformErrors.length ? `；${platformErrors.join("；")}` : "";
+          throw new Error(`没有成功打开并保存玩法案例帖子${details}`);
+        }
+        if (task.project?.designType === "brand") await collectBrandStoreCases(context, task, activity);
+        Object.assign(activity, {
+          phase: "completed",
+          message: `本轮采集完成：${[
+            selectedFeedbackPlatforms.has("xiaohongshu") ? `小红书 ${saved} 条` : "",
+            selectedFeedbackPlatforms.has("weibo") ? `微博 ${weiboSaved} 条` : "",
+            selectedFeedbackPlatforms.has("voiceOfUser") ? `用户之声 ${voiceSaved} 条` : "",
+          ].filter(Boolean).join("、")}。采集时间：${task.project?.feedbackStartDate || "2025-10-01"} 至 ${task.project?.feedbackEndDate || "今"}。${platformErrors.length ? `平台异常：${platformErrors.join("；")}` : ""}`,
+          agentRecoveryCalls: xhsAgent.recoveryCalls,
+          agentSummaryCalls: xhsAgent.summaryCalls,
+        });
+        await updateTask(task.id, "completed", activity);
+        return;
+      }
       const visualSamples = await collectXiaohongshuVisual(page, task, xhsAgent, activity);
+      if (!visualSamples) return;
+      if (!visualSamples.length) throw new Error("未采集到可用竞品详情截图，无法生成没有证据的视觉方向");
       const trendAgent = createResearchBrowserAgent();
       Object.assign(activity, { phase: "official_trend_reading", message: "正在读取官方趋势并与竞品视觉特征交叉比较" });
       activity.sourceProgress.officialTrends = { phase: "reading", progress: 30 };
       await updateTask(task.id, "running", activity);
-      const researchSources = await readSources(context, researchSourcesFor(task.project));
-      activity.researchSources = researchSources.map(({ name, url }) => ({ name, url }));
       const currentOfficialSources = await readSources(context, officialTrendSources);
+      if (!currentOfficialSources.length) throw new Error("三个官方趋势平台均无法读取，无法形成可追溯的视觉方向");
       activity.sourceProgress.officialTrends = { phase: "comparing", progress: 75 };
       const trendSelection = await trendAgent.selectVisualTrends({
-        projectContext: task.project, officialSources: [...researchSources, ...currentOfficialSources], xhsVisualSamples: visualSamples,
+        projectContext: task.project, officialSources: currentOfficialSources, xhsVisualSamples: visualSamples,
       });
       if (!trendSelection?.trends || trendSelection.trends.length !== 4) throw new Error("未能形成4个可确认的视觉方向");
-      activity.visualDirections = trendSelection.trends.map((trend) => ({
-        label: String(trend.label || "").trim(),
-        sourceNames: Array.isArray(trend.sourceNames) ? trend.sourceNames : [],
-        rationale: String(trend.rationale || "").trim(),
-        sampleIds: Array.isArray(trend.sampleIds) ? trend.sampleIds.filter((id) => visualSamples.some((sample) => sample.id === id)) : [],
-      }));
+      activity.visualDirections = trendSelection.trends.map((trend, index) => {
+        const linkedSampleIds = Array.isArray(trend.sampleIds)
+          ? trend.sampleIds.filter((id) => visualSamples.some((sample) => sample.id === id)).slice(0, 4)
+          : [];
+        // A visual-direction card must always show one or more screenshots.
+        // When the model does not explicitly link one, use a collected detail
+        // screenshot as the minimum evidence rather than rendering an empty card.
+        return {
+          label: String(trend.label || "").trim(),
+          sourceNames: Array.isArray(trend.sourceNames) ? trend.sourceNames : [],
+          rationale: String(trend.rationale || "").trim(),
+          sampleIds: linkedSampleIds.length ? linkedSampleIds : [visualSamples[index % visualSamples.length].id],
+        };
+      });
       activity.officialTrendSources = currentOfficialSources.map(({ name, url }) => ({ name, url }));
       activity.sourceProgress.officialTrends = { phase: "completed", progress: 100 };
       Object.assign(activity, {
@@ -1090,16 +2449,12 @@ async function processTask(context, task) {
     const evaluatedSamples = visualResults
       .flatMap((result) => result.status === "fulfilled" ? result.value : []);
     const incompletePlatforms = visualPlatforms.filter((platform) => Number(activity.sourceProgress[platform]?.reviewed || 0) < visualDetailsPerPlatform);
-    const selectedSamples = selectBestVisualSamples(evaluatedSamples, visualQueries, visualPlatforms);
+    const selectedSamples = selectBestVisualSamples(evaluatedSamples, visualQueries);
     const incompleteTrends = visualQueries.filter((trend) => {
       const trendSamples = selectedSamples.filter((sample) => sample.trendKey === trend.key);
-      const platformMinimum = Math.floor(visualSamplesPerTrend / visualPlatforms.length);
-      return trendSamples.length !== visualSamplesPerTrend
-        || trendSamples.filter((sample) => sample.referenceType === "inspiration").length !== 5
-        || trendSamples.filter((sample) => sample.referenceType === "execution").length !== 5
-        || visualPlatforms.some((platform) => trendSamples.filter((sample) => sample.platform === platform).length < platformMinimum);
+      return trendSamples.length < visualSamplesPerTrend;
     });
-    if (!selectedSamples.length) throw new Error("三个视觉平台均未获得可用样本，无法生成视觉案例结果");
+    if (!selectedSamples.length) throw new Error("Behance 与 Pinterest 均未获得可用样本，无法生成视觉案例结果");
     for (const sample of selectedSamples) {
       await api(`/api/research/tasks/${task.id}/visual-samples`, { method: "POST", body: JSON.stringify(sample) });
     }
@@ -1129,8 +2484,9 @@ async function processTask(context, task) {
     await updateTask(task.id, "completed", activity);
   } catch (error) {
     if (error instanceof LoginRequiredError) {
-      await updateTask(task.id, "needs_login", { ...activity, phase: "needs_login", message: error.message }, {
-        error: error.message, blockedSource: "xiaohongshu", actionUrl: error.url,
+      const blockedSource = gameplayPlatformSpecs.find((spec) => spec.name === error.platform)?.id || "xiaohongshu";
+      await updateTask(task.id, "needs_login", { ...activity, phase: "needs_login", loginRequiredPlatforms: [error.platform || "小红书"], message: error.message }, {
+        error: error.message, blockedSource, actionUrl: error.url,
       });
       return;
     }

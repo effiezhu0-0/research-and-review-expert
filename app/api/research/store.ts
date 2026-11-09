@@ -73,6 +73,9 @@ export async function ensureResearchSchema() {
       relevance INTEGER NOT NULL DEFAULT 0,
       media_keys TEXT NOT NULL DEFAULT '[]',
       valuable_comments TEXT NOT NULL DEFAULT '[]',
+      dedupe_key TEXT,
+      identity_text TEXT NOT NULL DEFAULT '',
+      screenshot_hash TEXT,
       selected INTEGER NOT NULL DEFAULT 0,
       excluded INTEGER NOT NULL DEFAULT 0
     )`),
@@ -156,6 +159,10 @@ export async function ensureResearchSchema() {
   if (!candidateNames.has("valuable_comments")) {
     await DB.prepare("ALTER TABLE research_candidates ADD COLUMN valuable_comments TEXT NOT NULL DEFAULT '[]'").run();
   }
+  if (!candidateNames.has("dedupe_key")) await DB.prepare("ALTER TABLE research_candidates ADD COLUMN dedupe_key TEXT").run();
+  if (!candidateNames.has("identity_text")) await DB.prepare("ALTER TABLE research_candidates ADD COLUMN identity_text TEXT NOT NULL DEFAULT ''").run();
+  if (!candidateNames.has("screenshot_hash")) await DB.prepare("ALTER TABLE research_candidates ADD COLUMN screenshot_hash TEXT").run();
+  await DB.prepare("CREATE INDEX IF NOT EXISTS idx_research_candidates_dedupe ON research_candidates(task_id, source, dedupe_key)").run();
   const visualColumns = await DB.prepare("PRAGMA table_info(research_visual_samples)").all<{ name: string }>();
   const visualNames = new Set(visualColumns.results.map((column) => column.name));
   for (const [name, definition] of [

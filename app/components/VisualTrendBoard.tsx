@@ -132,7 +132,7 @@ export default function VisualTrendBoard() {
   return (
     <section className="visual-trends">
       <header className="visual-trends-heading">
-        <div><small>VISUAL TREND RESEARCH</small><h2>{designField === "brand" ? "数字品牌视觉方向" : designField === "marketing" ? "大促视觉方向" : "互动游戏视觉趋势"}</h2><p>每次选择 4 个方向；每个平台完成 40 个详情页后，择优保留每方向 10 张参考图。</p></div>
+        <div><small>VISUAL TREND RESEARCH</small><h2>{designField === "brand" ? "数字品牌视觉方向" : designField === "marketing" ? "大促视觉方向" : "互动游戏视觉趋势"}</h2><p>根据图片与已确认搜索词的相关性筛选，每个方向最多展示 10 张参考图。</p></div>
         <span>地区不限</span>
       </header>
 
@@ -153,14 +153,11 @@ export default function VisualTrendBoard() {
           <header><div><span>视觉方向</span><h3>{trend.label}</h3></div></header>
           {trend.selectionReason && <p className="trend-selection-reason"><b>选择原因</b>{trend.selectionReason}</p>}
           <p className="trend-report-line">趋势依据：{trend.reports.join(" · ") || "视觉案例交叉归纳"}</p>
-          <div className="trend-reference-groups">{(["inspiration", "execution"] as const).map((type) => {
-            const typed = trend.items.filter((item) => (item.referenceType || "inspiration") === type)
-              .sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0)).slice(0, 5);
-            return <section key={type}><h4>{type === "inspiration" ? "灵感参考" : "执行参考"}<span>{type === "inspiration" ? "色彩、材质、构图与形态" : "同类界面、品牌与数字体验"}</span></h4><div className="trend-samples">{typed.map((sample) => <figure key={sample.id}>
+          <div className="trend-reference-gallery"><h4>视觉参考<span>按图片与搜索词的相关性排序</span></h4><div className="trend-samples">{trend.items
+            .slice().sort((a, b) => Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0)).slice(0, 10).map((sample) => <figure key={sample.id}>
               {sample.imageUrl || sample.screenshotKey ? <img src={`/api/research/tasks/${taskId}/visual-samples/${sample.id}/image`} alt={sample.projectTitle} /> : <div />}
               <figcaption><a href={sample.projectUrl} target="_blank" rel="noreferrer">{sample.projectTitle}</a><PlatformLogo platform={sample.platform} /><time>{sample.publishedAt ? sample.publishedAt.slice(0, 10) : "时间未公开"}</time></figcaption>
-            </figure>)}</div></section>;
-          })}</div>
+            </figure>)}</div></div>
         </article>
       ))}</div> : <div className="visual-trends-empty"><strong>{running ? "正在采集视觉样本" : "还没有视觉趋势结果"}</strong><span>{running ? `Worker 会同步进入 ${visualPlatforms.map((item) => item.name).join("、")} 详情页。` : "完成研究并确认4个方向后，系统会开始收集参考图。"}</span></div>}
     </section>

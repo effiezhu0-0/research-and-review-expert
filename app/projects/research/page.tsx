@@ -7,6 +7,8 @@ import ProjectRequirementSummary from "../../components/ProjectRequirementSummar
 import ProjectTopbar from "../../components/ProjectTopbar";
 import ResearchRunner from "../../components/ResearchRunner";
 import CandidateCaseBoard from "../../components/CandidateCaseBoard";
+import VisualTrendBoard from "../../components/VisualTrendBoard";
+import { saveCurrentProject } from "../../lib/savedProjects";
 
 const cases = [
   { id: "sample-1", name: "淘宝夏日能量收集玩法", brand: "淘宝", platform: "小红书", media: "帖子截图", author: "电商玩法观察", date: "2026.07.18", type: "收集", goal: "促活", match: 94, tone: "lavender", insight: "帖子完整展示了入口、任务页和阶段奖励，适合观察进度反馈如何推动持续参与。", tags: ["进度反馈", "阶段奖励", "低门槛"] },
@@ -39,9 +41,14 @@ export default function ResearchPage() {
   const [generating, setGenerating] = useState(false);
   const [hasGeneratedStrategy, setHasGeneratedStrategy] = useState(false);
   const [researchStatus, setResearchStatus] = useState("queued");
+  const [researchMode, setResearchMode] = useState<"play" | "visual">("play");
 
   useEffect(() => {
     const shouldStart = window.sessionStorage.getItem("design-lab-start-research") === "1";
+    try {
+      const draft = JSON.parse(window.localStorage.getItem("design-lab-project-draft") || "{}");
+      setResearchMode(draft.researchMode === "visual" ? "visual" : "play");
+    } catch { /* use gameplay research by default */ }
     setResearching(shouldStart);
     const taskId = window.localStorage.getItem("design-lab-active-research-task") || "";
     if (taskId) {
@@ -84,27 +91,60 @@ export default function ResearchPage() {
     window.location.href = "/projects/strategy";
   };
 
+  const saveResearch = () => {
+    const taskId = window.localStorage.getItem("design-lab-active-research-task") || "";
+    if (!taskId) return;
+    try {
+      const project = JSON.parse(window.localStorage.getItem("design-lab-project-draft") || "{}");
+      const id = window.localStorage.getItem("design-lab-current-project-id") || taskId;
+      saveCurrentProject({ id, taskId, name: String(project.projectName || "未命名项目"), kind: project.designType === "brand" ? "品牌设计" : project.designType === "marketing" ? "大促设计" : "互动设计", stage: researchMode === "visual" ? "视觉调研" : "竞品调研", progress: 40, savedAt: new Date().toISOString(), route: "/projects/research", project });
+      flash("用户调研已保存");
+    } catch { flash("保存失败，请稍后重试"); }
+  };
+
+  const resumeVisualCollection = async () => {
+    const taskId = window.localStorage.getItem("design-lab-active-research-task") || "";
+    if (!taskId) return;
+    const response = await fetch(`/api/research/tasks/${taskId}`, { cache: "no-store" }).catch(() => null);
+    const data = await response?.json().catch(() => null);
+    if (!response?.ok) return;
+    await fetch(`/api/research/tasks/${taskId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        status: "queued",
+        activity: { ...(data?.task?.activity || {}), executionRequested: true, executionRequestedAt: new Date().toISOString(), phase: "visual_reference_queued", message: "已确认视觉方向，开始采集参考图" },
+      }),
+    });
+  };
+
   return (
     <main className="research-page">
       <DashboardSidebar projectActive />
 
       <section className="research-main">
-        <ProjectTopbar section="案例与用户反馈" />
+        <ProjectTopbar section={researchMode === "visual" ? "竞品视觉与趋势" : "玩法案例与用户反馈调研"} />
 
         <div className="research-content">
           <FlowProgress active={2} />
           <ProjectRequirementSummary />
           {researching ? (
             <>
-              {researchStatus === "awaiting_visual_confirmation" && <CandidateCaseBoard onSelectionChange={setSelected} />}
-              <ResearchRunner candidateSelectionCount={selected.length} onStatusChange={setResearchStatus} onConfirmDirections={() => generateStrategies(false)} onComplete={() => {
+              {researchMode === "play" && researchStatus === "awaiting_visual_confirmation" && <CandidateCaseBoard onSelectionChange={setSelected} />}
+              <ResearchRunner candidateSelectionCount={selected.length} onStatusChange={setResearchStatus} onConfirmDirections={() => {
+                if (researchMode === "visual") {
+                  return resumeVisualCollection();
+                }
+                generateStrategies(false);
+              }} onComplete={() => {
                 window.sessionStorage.removeItem("design-lab-start-research");
                 setResearching(false);
               }} />
             </>
           ) : (
           <>
-          <CandidateCaseBoard onSelectionChange={setSelected} />
+          {researchMode === "play" && <CandidateCaseBoard onSelectionChange={setSelected} />}
+          {researchMode === "visual" && <VisualTrendBoard />}
           {false && <>
           <div className="research-intro">
             <div><p>RESEARCH EVIDENCE</p><h1>为你找到 4 个相关案例。</h1><span>根据“促活、收集、完成率低”等项目条件推荐。选择最值得参考的内容，作为下一步策略依据。</span></div>
@@ -155,15 +195,10 @@ export default function ResearchPage() {
           </section>
           </>}
 
-          <footer className="research-footer">
-            <button type="button" onClick={() => { window.location.href = "/projects/new"; }}>返回修改需求</button>
-            {hasGeneratedStrategy && <button type="button" disabled={!selected.length || generating} onClick={() => { generateStrategies(true); }}>
-              按当前选择重新生成
-            </button>}
-            <button className="generate-button" type="button" disabled={!selected.length || generating} onClick={() => { generateStrategies(false); }}>
-              {generating ? "正在提炼帖子与用户反馈…" : hasGeneratedStrategy ? "查看已生成归因" : `基于 ${selected.length} 个案例生成策略`} <span>→</span>
-            </button>
-          </footer>
+          {researchMode === "play" && <footer className="research-footer">
+              <button type="button" onClick={saveResearch}>保存</button>
+            <button className="generate-button" type="button" disabled={!selected.length || generating} onClick={() => { generateStrategies(false); }}>设计方向 <span>→</span></button>
+          </footer>}
           </>
           )}
         </div>

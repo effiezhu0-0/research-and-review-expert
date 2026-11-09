@@ -1,12 +1,16 @@
 type PlatformLogoProps = {
-  platform: "xiaohongshu" | "behance" | "pinterest" | "huaban" | "dribbble" | "zcool";
+  platform: "xiaohongshu" | "weibo" | "voiceOfUser" | "behance" | "pinterest" | "adobe" | "canva" | "huaban" | "dribbble" | "zcool";
   label?: boolean;
 };
 
 const platformNames = {
   xiaohongshu: "小红书",
+  weibo: "微博",
+  voiceOfUser: "用户之声",
   behance: "Behance",
   pinterest: "Pinterest",
+  adobe: "Adobe",
+  canva: "Canva",
   huaban: "花瓣",
   dribbble: "Dribbble",
   zcool: "ZCOOL",
@@ -16,8 +20,15 @@ export default function PlatformLogo({ platform, label = false }: PlatformLogoPr
   const mark = platform === "xiaohongshu" ? "RED" : null;
   return (
     <span className={`platform-brand platform-${platform}`} title={platformNames[platform]} aria-label={platformNames[platform]}>
-      <i aria-hidden="true">{platform === "pinterest" ? (
-        <svg viewBox="0 0 16 16" focusable="false"><path d="M8 0a8 8 0 0 0-2.915 15.452c-.07-.633-.133-1.606.027-2.297.146-.625.938-3.977.938-3.977s-.239-.479-.239-1.187c0-1.113.645-1.943 1.448-1.943.682 0 1.012.513 1.012 1.127 0 .686-.437 1.713-.663 2.664-.188.797.4 1.446 1.185 1.446 1.423 0 2.517-1.5 2.517-3.664 0-1.915-1.377-3.254-3.342-3.254-2.276 0-3.61 1.707-3.61 3.473 0 .688.265 1.425.596 1.826a.24.24 0 0 1 .056.23c-.061.253-.196.796-.223.907-.035.146-.116.177-.268.107-1-.465-1.624-1.926-1.624-3.1 0-2.523 1.834-4.84 5.286-4.84 2.775 0 4.932 1.977 4.932 4.62 0 2.756-1.738 4.976-4.151 4.976-.811 0-1.573-.421-1.834-.92l-.498 1.902c-.181.695-.669 1.566-.995 2.097A8 8 0 1 0 8 0z" /></svg>
+      <i aria-hidden="true">{platform === "weibo" ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src="/icons/weibo-logo.png" alt="" />
+      ) : platform === "voiceOfUser" ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src="/icons/voice-of-user-logo.png" alt="" />
+      ) : ["pinterest", "adobe", "canva"].includes(platform) ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={`/icons/${platform}-logo.png`} alt="" />
       ) : platform === "huaban" ? (
         <svg viewBox="0 0 24 24" focusable="false">
           <defs><linearGradient id="huaban-mark" x1="0" x2="1"><stop stopColor="#ef7779"/><stop offset="1" stopColor="#db3038"/></linearGradient></defs>

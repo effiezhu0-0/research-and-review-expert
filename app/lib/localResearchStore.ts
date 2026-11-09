@@ -9,6 +9,7 @@ export type ProjectDraft = {
   customValues?: Record<string, string>;
   meetingContext?: { link?: string; fileName?: string; extractedText?: string; pageCount?: number; keyPoints?: string[] };
   decisionPosture?: number;
+  researchMode?: "play" | "visual";
 };
 
 export type ResearchTask = {

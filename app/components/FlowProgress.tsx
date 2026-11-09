@@ -15,9 +15,12 @@ export default function FlowProgress({ active }: FlowProgressProps) {
             <button
               type="button"
               disabled={number > active}
-              onClick={() => { if (number <= active) window.location.href = paths[index]; }}
+              onClick={() => {
+                if (number > active) return;
+                window.location.href = number === 1 ? `/projects/new?from=flow&t=${Date.now()}` : paths[index];
+              }}
             >
-              <i>{number}{number < active && <img src="/check-circle-success.svg" alt="已完成" />}</i>
+              <i>{number < active ? <img src="/icons/step-complete.svg" alt="已完成" /> : number}</i>
               <span>{step}</span>
             </button>
           </li>

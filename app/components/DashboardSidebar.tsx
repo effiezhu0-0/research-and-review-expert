@@ -1,21 +1,112 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import PersonalAISettings from "./PersonalAISettings";
-import { openSavedProject, readSavedProjects, SavedProject } from "../lib/savedProjects";
+import NightingaleIcon, { NightingaleIconName } from "./NightingaleIcon";
+import { deleteSavedProject, openSavedProject, readSavedProjects, renameSavedProject, SavedProject } from "../lib/savedProjects";
 
 type DashboardSidebarProps = {
-  active?: "home" | "projects" | "tasks" | "favorites" | "cases" | "feedback" | "strategy" | "standards";
+  active?: "home" | "projects" | "project" | "tasks" | "favorites" | "cases" | "feedback" | "strategy" | "standards";
   projectActive?: boolean;
 };
 
-export default function DashboardSidebar({ active, projectActive = false }: DashboardSidebarProps) {
-  const [displayName, setDisplayName] = useState("当前使用者");
+function SidebarBrand() {
+  return <div className="brand">
+    <span className="lab-mark" aria-hidden="true"><img src="/design-lab-logo-purple.png" alt="" /></span>
+    <div><strong>设计调研与评审专家</strong><span>AI 设计工作台</span></div>
+  </div>;
+}
+
+function SidebarNavItem({ label, icon, active, count, onClick }: { label: string; icon: NightingaleIconName; active?: boolean; count?: number; onClick?: () => void }) {
+  return <button className={`nav-item ${active ? "active" : ""}`} type="button" onClick={onClick}>
+    <NightingaleIcon name={icon} size={20} />{label}{count !== undefined && <small>{count}</small>}
+  </button>;
+}
+
+function SidebarProjectItem({ project, active }: { project: SavedProject; active: boolean }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [name, setName] = useState(project.name);
+  const [error, setError] = useState("");
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const closeEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeEscape);
+    };
+  }, [menuOpen]);
+
+  const saveName = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextName = name.trim();
+    if (!nextName) { setError("请输入项目名称"); return; }
+    if (nextName !== project.name) renameSavedProject(project.id, nextName);
+    setRenameOpen(false);
+    setMenuOpen(false);
+    setError("");
+  };
+
+  const confirmDelete = () => {
+    deleteSavedProject(project.id);
+    setDeleteOpen(false);
+    if (active) window.location.href = "/";
+  };
+
+  return <div className="sidebar-project-item" ref={root}>
+    <div className={`sidebar-project-row ${active ? "active" : ""}`}>
+      <button className={`nav-current-project ${active ? "active" : ""}`} type="button" onClick={() => openSavedProject(project)}>
+        <NightingaleIcon name="file" size={18} /><span>{project.name}</span>
+      </button>
+      <button className="sidebar-project-more" type="button" aria-label={`${project.name}项目菜单`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
+        <span className="sidebar-project-more-icon" aria-hidden="true" />
+      </button>
+    </div>
+    {menuOpen && <div className="sidebar-project-menu" role="menu">
+      <button type="button" role="menuitem" onClick={() => { setName(project.name); setError(""); setRenameOpen(true); setMenuOpen(false); }}>重命名</button>
+      <button className="danger" type="button" role="menuitem" onClick={() => { setDeleteOpen(true); setMenuOpen(false); }}>删除项目</button>
+    </div>}
+    {renameOpen && <div className="sidebar-project-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRenameOpen(false); }}>
+      <form className="sidebar-project-dialog" role="dialog" aria-modal="true" aria-labelledby={`rename-project-title-${project.id}`} onSubmit={saveName}>
+        <h2 id={`rename-project-title-${project.id}`}>重命名项目</h2>
+        <label htmlFor={`rename-project-input-${project.id}`}>项目名称</label>
+        <input id={`rename-project-input-${project.id}`} autoFocus value={name} onChange={(event) => { setName(event.target.value); setError(""); }} />
+        {error && <small role="alert">{error}</small>}
+        <footer><button type="button" onClick={() => setRenameOpen(false)}>取消</button><button className="primary" type="submit">保存</button></footer>
+      </form>
+    </div>}
+    {deleteOpen && <div className="sidebar-project-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setDeleteOpen(false); }}>
+      <div className="sidebar-project-dialog" role="alertdialog" aria-modal="true" aria-labelledby={`delete-project-title-${project.id}`}>
+        <h2 id={`delete-project-title-${project.id}`}>删除项目</h2>
+        <p>确定删除“{project.name}”吗？删除后项目将从项目列表中移除。</p>
+        <footer><button type="button" onClick={() => setDeleteOpen(false)}>取消</button><button className="danger-button" type="button" onClick={confirmDelete}>删除</button></footer>
+      </div>
+    </div>}
+  </div>;
+}
+
+function SidebarProfile({ displayName }: { displayName: string }) {
+  return <div className="sidebar-footer"><div className="profile"><span className="avatar">E</span><div><strong>{displayName}</strong></div><PersonalAISettings trigger="menu" /></div></div>;
+}
+
+export default function DashboardSidebar({ active }: DashboardSidebarProps) {
+  const [displayName] = useState("Effie");
   const [projects, setProjects] = useState<SavedProject[]>([]);
-  const [activeTaskId, setActiveTaskId] = useState("");
+  const [activeProjectId, setActiveProjectId] = useState("");
   const go = (path: string) => { window.location.href = path; };
   const createNewProject = () => {
     window.localStorage.removeItem("design-lab-project-draft");
+    window.localStorage.removeItem("design-lab-current-project-id");
     window.localStorage.removeItem("design-lab-active-research-task");
     window.localStorage.removeItem("design-lab-research-task");
     window.localStorage.removeItem("design-lab-research-evidence");
@@ -27,46 +118,41 @@ export default function DashboardSidebar({ active, projectActive = false }: Dash
     queueMicrotask(() => {
       try {
         setProjects(readSavedProjects());
-        setActiveTaskId(window.localStorage.getItem("design-lab-active-research-task") || "");
+        setActiveProjectId(window.localStorage.getItem("design-lab-current-project-id") || "");
       } catch { setProjects([]); }
     });
-    fetch("/api/account", { cache: "no-store" })
-      .then(async (response) => response.ok ? response.json() : null)
-      .then((data) => { if (data?.displayName) setDisplayName(data.displayName); })
-      .catch(() => undefined);
+    const refreshProjects = () => {
+      setProjects(readSavedProjects());
+      setActiveProjectId(window.localStorage.getItem("design-lab-current-project-id") || "");
+    };
+    window.addEventListener("design-lab-projects-updated", refreshProjects);
+    return () => window.removeEventListener("design-lab-projects-updated", refreshProjects);
   }, []);
+
+  const navItem = (id: DashboardSidebarProps["active"], label: string, icon: NightingaleIconName, count?: number) => (
+    <SidebarNavItem label={label} icon={icon} active={active === id} count={count} onClick={() => id === "home" || id === "projects" ? go("/") : undefined} />
+  );
 
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <span className="lab-mark" aria-hidden="true"><i /><i /><i /><i /></span>
-        <div><strong>设计调研与评审专家</strong><span>AI 设计工作台</span></div>
-        <button type="button" aria-label="切换空间">⌄</button>
-      </div>
-      <button className="new-project-side" type="button" onClick={createNewProject}><span>＋</span>新建项目<kbd>N</kbd></button>
+      <SidebarBrand />
+      <button className="new-project-side" type="button" onClick={createNewProject}><NightingaleIcon name="plus" size={20} />新建项目<kbd>N</kbd></button>
       <nav className="nav" aria-label="主导航">
-        <button className={`nav-item ${active === "home" ? "active" : ""}`} type="button" onClick={() => go("/")}><span>⌂</span>首页</button>
-        <button className={`nav-item ${active === "projects" ? "active" : ""}`} type="button" onClick={() => go("/")}><span>▱</span>全部项目<small>{projects.length}</small></button>
+        {navItem("home", "首页", "home")}
+        <SidebarNavItem label="全部项目" icon="folder" active={active === "projects"} count={projects.length} onClick={() => go("/")} />
         {projects.map((project) => (
-          <button className={`nav-current-project ${projectActive && project.taskId === activeTaskId ? "active" : ""}`} type="button" key={project.id} onClick={() => openSavedProject(project)}>
-            <i aria-hidden="true" />
-            <span>{project.name}</span>
-          </button>
+          <SidebarProjectItem key={project.id} project={project} active={active === "project" && project.id === activeProjectId} />
         ))}
-        <button className={`nav-item ${active === "tasks" ? "active" : ""}`} type="button"><span>✓</span>我的任务<small>3</small></button>
-        <button className={`nav-item ${active === "favorites" ? "active" : ""}`} type="button"><span>☆</span>我的收藏</button>
+        {navItem("favorites", "我的收藏", "star")}
       </nav>
-      <div className="nav-group">
+      <div className="nav-group" hidden>
         <p>研究资产</p>
-        <button className={`nav-item ${active === "cases" ? "active" : ""}`} type="button"><span>◫</span>案例库</button>
-        <button className={`nav-item ${active === "feedback" ? "active" : ""}`} type="button"><span>◌</span>用户反馈</button>
-        <button className={`nav-item ${active === "strategy" ? "active" : ""}`} type="button"><span>✦</span>设计策略</button>
-        <button className={`nav-item ${active === "standards" ? "active" : ""}`} type="button"><span>≡</span>规范与依据</button>
+        {navItem("cases", "案例库", "archive")}
+        {navItem("feedback", "用户反馈", "message")}
+        {navItem("strategy", "设计策略", "sparkles")}
+        {navItem("standards", "规范与依据", "list")}
       </div>
-      <div className="sidebar-footer">
-        <button className="nav-item" type="button"><span>?</span>使用说明</button>
-        <div className="profile"><span className="avatar">{displayName.slice(0, 1)}</span><div><strong>{displayName}</strong><span>当前使用者</span></div><PersonalAISettings trigger="menu" /></div>
-      </div>
+      <SidebarProfile displayName={displayName} />
     </aside>
   );
 }
