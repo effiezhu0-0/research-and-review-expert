@@ -1,0 +1,123 @@
+app/projects/new/page.tsx
+  s_b6921652694a21::t_f836e0ef350a54 96-105,107,131,147-152,154,185-190,192,198,211-236,252-273,305,307-308,322-326,341-342,346-350,363-371,379,390,417,431-441,444,446,453-470,494-498,503-539,541-544
+  s_b6921652694a21::t_3d0599ed2532d2 545
+  s_3b66af02a070c0::t_d835e710c457ce 3,7,13,17-23,25-37,42,47-58,89,548-557
+scripts/playwright-research-worker.mjs
+  s_b6921652694a21::t_8968faf034a7cd 143-144,156-369,399-405
+  s_b6921652694a21::t_69e6406e7e12db 140-142
+  s_b6921652694a21::t_c3e3f7c1d02184 406-408
+  s_3b66af02a070c0::t_55023accab3cd7 22-26,37-38,68-72,409-524,535-1410,1437,1520,1523-1533,1598,1603,1616,1662,1694-1696,1703-1705,1708-1709,1712,1716-1718,1742,1762,1767-1783,1795,1798,1809,1813,1835-1846,1872-1874,1884,1897,1911,1940,1945-1949,1958-2041,2043-2044,2057,2059,2072,2076-2121,2123-2124,2136,2148-2164,2166-2193,2195,2197-2201,2310-2315,2317-2328,2330,2335-2388,2390-2391,2397,2400,2403-2416,2452,2455,2457,2487-2489
+app/projects/overview/page.tsx
+  s_b6921652694a21::t_36fe0b70c4bd27 171-210
+  s_b6921652694a21::t_bfdeac0c2e2195 168-170
+  s_b6921652694a21::t_cd80cb9070003c 211-213
+  s_3b66af02a070c0::t_87a498b48a8263 1-167,214-253
+app/globals.css
+  s_b6921652694a21::t_63593fe501f4a9 2016-2041
+  s_b6921652694a21::t_5dcea53ca07ed6 2042-2043
+  s_b6921652694a21::t_1fb98dd9e7dc87 2013-2015
+  s_b6921652694a21::t_3d807a642db2ec 2044-2046
+  s_3b66af02a070c0::t_c3c724a9123695 5-24,26-28,33-52,54-55,58-65,72,74,133,157,199,395-397,797-803,815-819,821,824-829,856-858,894-2012,2047-2072
+app/api/research/tasks/route.ts
+  s_b6921652694a21::t_9a33095f96d02f 7-12
+app/api/research/keywords/route.ts
+  s_66ec37b3414bc1::t_e2ff9e4f82e157 1-34
+app/api/research/tasks/[id]/candidates/route.ts
+  s_26147853f989fe::t_7243bf85ce96b7 2,24-26,32-52,57-61,65-69,77-80,82-96,99-125,142-143,145,150,153-154,156,166-172,176,179-206
+app/api/research/tasks/[id]/strategies/route.ts
+  s_55dc4acd99efbe::t_8ca66c217f8084 113,182
+app/api/solution-analysis/route.ts
+  s_55dc4acd99efbe::t_b891dada09fd0b 15-18
+app/api/solution-review/route.ts
+  s_55dc4acd99efbe::t_f21ea33f343a31 11,18
+app/components/CandidateCaseBoard.tsx
+  s_55dc4acd99efbe::t_5e8de1f917f6c0 25-30,53-60,91-111,113-114,141-142,147,163
+app/components/DashboardSidebar.tsx
+  s_66ec37b3414bc1::t_7524b39b21bb25 3,5-6,9,13-103,105,109,121,124-129,132-135,138-139,141-142,144,146,148,150-153,155
+app/components/ResearchRunner.tsx
+  s_88de5a2994597c::t_d9997e92dccba3 3,12,25,30-34,44,47,52-54,59-61,68-91,102,113-119,121-130,134-138,168-171,195-196,198-201,204-205,210,213,216,221,223,228-230,234-236,252-348,350,366-367,370-388,390-420,423,426,428-429,431,434,440,443-479,482-488,498,500-501
+app/lib/researchProfiles.ts
+  s_792a47f7dc7ef5::t_bc3fe6178ee8a4 5-7,12,17
+app/lib/savedProjects.ts
+  s_66ec37b3414bc1::t_8ebb7ee14d749c 7,15,20-27,34-68,73,75
+app/page.tsx
+  s_55dc4acd99efbe::t_054286439fcf28 3,5-6,8,10-47,75,86,100,107-108,116-118,121,124,144,147-151,154,157
+app/projects/import/page.tsx
+  s_55dc4acd99efbe::t_cbcad45965cccc 31,51-52,76,122
+app/projects/research/page.tsx
+  s_55dc4acd99efbe::t_cc35004acbd31b 10-11,44,48-51,94-120,126,133-139,146-147,198-201
+app/projects/score/page.tsx
+  s_55dc4acd99efbe::t_80fca032f5b568 10-11,28,35,53,55
+app/projects/strategy/page.tsx
+  s_55dc4acd99efbe::t_fa7363b83cab1c 16-49,65-67,72-80,131,139,160-165,176-190,198-201
+public/icons/more-regular.svg
+  s_66ec37b3414bc1::t_6aa4faddb1a9fa 1-5
+public/icons/star-regular.svg
+  s_66ec37b3414bc1::t_3b5c10dc7e64f3 1-3
+scripts/research-browser-agent.mjs
+  s_792a47f7dc7ef5::t_83c16873c2ec9f 210,214-215,219,221-230,233,240,244-245,249-251,254-256,258-259,261,291,321,361-392,425,432-436,448-454,474,497-498
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "970192dc60a303e7defcf875edeb76d435812df9",
+  "prompts": {},
+  "sessions": {
+    "s_26147853f989fe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1afb1-2f16-7ab3-a907-72ce9a6fe5ff",
+        "model": "unknown"
+      },
+      "human_author": "effiezhu0-0 <effie.zhuruoyan@gmail.com>"
+    },
+    "s_3b66af02a070c0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1bf81-ba02-7310-8257-9468ce221036",
+        "model": "unknown"
+      },
+      "human_author": "effiezhu0-0 <effie.zhuruoyan@gmail.com>"
+    },
+    "s_55dc4acd99efbe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1a5b4-353c-7830-b763-8ac1c9876509",
+        "model": "unknown"
+      },
+      "human_author": "effiezhu0-0 <effie.zhuruoyan@gmail.com>"
+    },
+    "s_66ec37b3414bc1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1be61-5bbf-79b1-9209-60f3406bc57a",
+        "model": "unknown"
+      },
+      "human_author": "effiezhu0-0 <effie.zhuruoyan@gmail.com>"
+    },
+    "s_792a47f7dc7ef5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a18c02-4cd7-76f2-8e7b-c484c314c2e9",
+        "model": "unknown"
+      },
+      "human_author": "effiezhu0-0 <effie.zhuruoyan@gmail.com>"
+    },
+    "s_88de5a2994597c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1b061-5b27-7853-a387-50d194581d98",
+        "model": "unknown"
+      },
+      "human_author": "effiezhu0-0 <effie.zhuruoyan@gmail.com>"
+    },
+    "s_b6921652694a21": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1bf21-73b7-7732-9826-c0d3bbca2672",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "effiezhu0-0 <effie.zhuruoyan@gmail.com>"
+    }
+  }
+}
