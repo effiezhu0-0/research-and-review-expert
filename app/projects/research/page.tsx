@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import DashboardSidebar from "../../components/DashboardSidebar";
+import NightingaleIcon from "../../components/NightingaleIcon";
 import FlowProgress from "../../components/FlowProgress";
 import ProjectRequirementSummary from "../../components/ProjectRequirementSummary";
 import ProjectTopbar from "../../components/ProjectTopbar";
 import ResearchRunner from "../../components/ResearchRunner";
 import CandidateCaseBoard from "../../components/CandidateCaseBoard";
 import VisualTrendBoard from "../../components/VisualTrendBoard";
-import { saveCurrentProject } from "../../lib/savedProjects";
+import { readSavedProjects, saveCurrentProject } from "../../lib/savedProjects";
 
 const cases = [
   { id: "sample-1", name: "淘宝夏日能量收集玩法", brand: "淘宝", platform: "小红书", media: "帖子截图", author: "电商玩法观察", date: "2026.07.18", type: "收集", goal: "促活", match: 94, tone: "lavender", insight: "帖子完整展示了入口、任务页和阶段奖励，适合观察进度反馈如何推动持续参与。", tags: ["进度反馈", "阶段奖励", "低门槛"] },
@@ -42,6 +43,7 @@ export default function ResearchPage() {
   const [hasGeneratedStrategy, setHasGeneratedStrategy] = useState(false);
   const [researchStatus, setResearchStatus] = useState("queued");
   const [researchMode, setResearchMode] = useState<"play" | "visual">("play");
+  const [selectedVisualDirections, setSelectedVisualDirections] = useState<string[]>([]);
 
   useEffect(() => {
     const shouldStart = window.sessionStorage.getItem("design-lab-start-research") === "1";
@@ -52,6 +54,15 @@ export default function ResearchPage() {
     setResearching(shouldStart);
     const taskId = window.localStorage.getItem("design-lab-active-research-task") || "";
     if (taskId) {
+      fetch(`/api/research/tasks/${taskId}`, { cache: "no-store" })
+        .then((response) => response.ok ? response.json() : null)
+        .then((data) => {
+          const activity = data?.task?.activity;
+          if (activity?.visualDirectionsConfirmed && Array.isArray(activity.visualDirections)) {
+            setSelectedVisualDirections(activity.visualDirections.map((direction: { label?: unknown }) => String(direction?.label || "")).filter(Boolean));
+          }
+        })
+        .catch(() => undefined);
       if (shouldStart) {
         fetch(`/api/research/tasks/${taskId}`, { cache: "no-store" })
           .then((response) => response.ok ? response.json() : null)
@@ -97,8 +108,9 @@ export default function ResearchPage() {
     try {
       const project = JSON.parse(window.localStorage.getItem("design-lab-project-draft") || "{}");
       const id = window.localStorage.getItem("design-lab-current-project-id") || taskId;
-      saveCurrentProject({ id, taskId, name: String(project.projectName || "未命名项目"), kind: project.designType === "brand" ? "品牌设计" : project.designType === "marketing" ? "大促设计" : "互动设计", stage: researchMode === "visual" ? "视觉调研" : "竞品调研", progress: 40, savedAt: new Date().toISOString(), route: "/projects/research", project });
-      flash("用户调研已保存");
+      const saved = readSavedProjects().find((item) => item.id === id);
+      saveCurrentProject({ id, taskId, name: String(project.projectName || "未命名项目"), kind: project.designType === "brand" ? "品牌设计" : project.designType === "marketing" ? "大促设计" : "互动设计", stage: researchMode === "visual" ? "视觉调研" : "用户研究", progress: 40, savedAt: new Date().toISOString(), route: "/projects/research", project: saved?.project || project });
+      flash(researchMode === "visual" ? "视觉研究已保存" : "用户调研已保存");
     } catch { flash("保存失败，请稍后重试"); }
   };
 
@@ -127,11 +139,11 @@ export default function ResearchPage() {
 
         <div className="research-content">
           <FlowProgress active={2} />
-          <ProjectRequirementSummary />
+          {researchMode !== "visual" || selectedVisualDirections.length > 0 ? <ProjectRequirementSummary visualMode={researchMode === "visual"} visualDirections={selectedVisualDirections} /> : null}
           {researching ? (
             <>
               {researchMode === "play" && researchStatus === "awaiting_visual_confirmation" && <CandidateCaseBoard onSelectionChange={setSelected} />}
-              <ResearchRunner candidateSelectionCount={selected.length} onStatusChange={setResearchStatus} onConfirmDirections={() => {
+              <ResearchRunner candidateSelectionCount={selected.length} onStatusChange={setResearchStatus} onVisualDirectionsConfirmed={setSelectedVisualDirections} onConfirmDirections={() => {
                 if (researchMode === "visual") {
                   return resumeVisualCollection();
                 }
@@ -144,7 +156,7 @@ export default function ResearchPage() {
           ) : (
           <>
           {researchMode === "play" && <CandidateCaseBoard onSelectionChange={setSelected} />}
-          {researchMode === "visual" && <VisualTrendBoard />}
+          {researchMode === "visual" && <VisualTrendBoard onSave={saveResearch} />}
           {false && <>
           <div className="research-intro">
             <div><p>RESEARCH EVIDENCE</p><h1>为你找到 4 个相关案例。</h1><span>根据“促活、收集、完成率低”等项目条件推荐。选择最值得参考的内容，作为下一步策略依据。</span></div>
@@ -197,7 +209,7 @@ export default function ResearchPage() {
 
           {researchMode === "play" && <footer className="research-footer">
               <button type="button" onClick={saveResearch}>保存</button>
-            <button className="generate-button" type="button" disabled={!selected.length || generating} onClick={() => { generateStrategies(false); }}>设计方向 <span>→</span></button>
+            <button className="generate-button" type="button" disabled={!selected.length || generating} onClick={() => { generateStrategies(false); }}>设计方向 <NightingaleIcon name="arrowRight" size={18} /></button>
           </footer>}
           </>
           )}

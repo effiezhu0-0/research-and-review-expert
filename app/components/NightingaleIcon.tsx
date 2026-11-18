@@ -2,6 +2,10 @@ import type { ReactNode, SVGProps } from "react";
 
 export type NightingaleIconName =
   | "archive"
+  | "arrowLeft"
+  | "arrowRight"
+  | "arrowUp"
+  | "arrowUpRight"
   | "calendarCheck"
   | "check"
   | "chevronDown"
@@ -13,6 +17,7 @@ export type NightingaleIconName =
   | "message"
   | "more"
   | "plus"
+  | "search"
   | "sparkles"
   | "star";
 
@@ -28,6 +33,10 @@ type Props = SVGProps<SVGSVGElement> & {
 export default function NightingaleIcon({ name, size = 20, ...props }: Props) {
   const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   const paths: Record<NightingaleIconName, ReactNode> = {
+    arrowLeft: <><path {...common} d="M19.5 12h-15" /><path {...common} d="m11 5.5-6.5 6.5 6.5 6.5" /></>,
+    arrowRight: <><path {...common} d="M4.5 12h15" /><path {...common} d="m13 5.5 6.5 6.5-6.5 6.5" /></>,
+    arrowUp: <><path {...common} d="M12 19.5v-15" /><path {...common} d="m5.5 11 6.5-6.5 6.5 6.5" /></>,
+    arrowUpRight: <><path {...common} d="M6.5 17.5 17.5 6.5" /><path {...common} d="M8 6.5h9.5V16" /></>,
     home: <><path {...common} d="M3.75 10.5 12 3.75l8.25 6.75v9a.75.75 0 0 1-.75.75H4.5a.75.75 0 0 1-.75-.75v-9Z" /><path {...common} d="M9.25 20.25v-6h5.5v6" /></>,
     folder: <><path {...common} d="M3.75 7.5a1.5 1.5 0 0 1 1.5-1.5h4l1.5 1.75h8a1.5 1.5 0 0 1 1.5 1.5v8.25a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5V7.5Z" /></>,
     file: <>
@@ -47,6 +56,7 @@ export default function NightingaleIcon({ name, size = 20, ...props }: Props) {
     list: <><path {...common} d="M8.5 6.5h11M8.5 12h11M8.5 17.5h11" /><path {...common} d="M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01" /></>,
     help: <><path {...common} d="M12 20.25a8.25 8.25 0 1 0 0-16.5 8.25 8.25 0 0 0 0 16.5Z" /><path {...common} d="M9.75 9a2.25 2.25 0 1 1 3.7 1.72c-.92.78-1.45 1.2-1.45 2.53M12 16.75h.01" /></>,
     plus: <path {...common} d="M12 4.5v15M4.5 12h15" />,
+    search: <><circle {...common} cx="10.75" cy="10.75" r="6.25" /><path {...common} d="m15.5 15.5 4.25 4.25" /></>,
     chevronDown: <path {...common} d="m7.5 10 4.5 4.5 4.5-4.5" />,
     more: <path {...common} d="M6.25 12h.01M12 12h.01M17.75 12h.01" />,
   };

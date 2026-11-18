@@ -1,22 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import NightingaleIcon from "./NightingaleIcon";
 
 export default function ProjectTopbar({ section, demo }: { section: string; demo?: string }) {
-  const [projectName, setProjectName] = useState("未命名项目");
+  const [projectId, setProjectId] = useState("");
 
   useEffect(() => {
-    try {
-      const draft = JSON.parse(window.localStorage.getItem("design-lab-project-draft") || "{}");
-      if (draft.projectName?.trim()) setProjectName(draft.projectName.trim());
-    } catch {
-      setProjectName("未命名项目");
-    }
+    setProjectId(window.localStorage.getItem("design-lab-current-project-id") || "");
   }, []);
+
+  const returnToProject = () => {
+    if (projectId) window.location.href = `/projects/overview?projectId=${encodeURIComponent(projectId)}`;
+    else window.history.back();
+  };
 
   return (
     <header className="project-topbar">
-      <div><span>{projectName}</span><b>/</b><strong>{section}</strong></div>
+      <button className="project-topbar-back" type="button" onClick={returnToProject}><NightingaleIcon name="arrowLeft" size={20} />返回</button>
       {demo === "可编辑" ? <button type="button" onClick={() => { window.location.href = "/"; }}>保存并退出</button> : demo ? <span className="demo-label">{demo}</span> : null}
     </header>
   );

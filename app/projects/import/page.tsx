@@ -5,7 +5,8 @@ import DashboardSidebar from "../../components/DashboardSidebar";
 import ProjectTopbar from "../../components/ProjectTopbar";
 import FlowProgress from "../../components/FlowProgress";
 import StageProgress from "../../components/StageProgress";
-import { DesignPoint, newDesignPoint, readSolution, saveSolution } from "../../lib/localSolutionStore";
+import NightingaleIcon from "../../components/NightingaleIcon";
+import { DesignPoint, newDesignPoint, readSolutionForProject, saveSolution } from "../../lib/localSolutionStore";
 import { personalAgentHeaders } from "../../lib/personalAgentConfig";
 import { saveSolutionImages } from "../../lib/solutionImageStore";
 
@@ -39,7 +40,8 @@ export default function ImportSolutionPage() {
   const [metricDrafts, setMetricDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    const existing = readSolution();
+    const projectId = window.localStorage.getItem("design-lab-current-project-id") || "";
+    const existing = readSolutionForProject(projectId);
     if (existing) {
       setProjectName(existing.projectName); setSolutionName(existing.solutionName); setVersion(existing.version);
       setSourceLink(existing.sourceLink); setFileName(existing.fileName); setPoints(existing.designPoints.map((point) => ({ ...point, metrics: normalizeMetrics(point.metrics || []) })));
@@ -73,8 +75,10 @@ export default function ImportSolutionPage() {
     if (!projectName.trim() || !solutionName.trim() || !validPoints.length) {
       setToast("请填写项目、方案名称，并至少添加一个设计点"); return;
     }
-    saveSolution({ projectName: projectName.trim(), solutionName: solutionName.trim(), version: version.trim(), sourceLink: sourceLink.trim(), fileName, importedAt: new Date().toISOString(), designPoints: validPoints });
-    window.localStorage.setItem("design-lab-project-draft", JSON.stringify({ projectName: projectName.trim(), stage: "review" }));
+    saveSolution({ projectId: window.localStorage.getItem("design-lab-current-project-id") || undefined, projectName: projectName.trim(), solutionName: solutionName.trim(), version: version.trim(), sourceLink: sourceLink.trim(), fileName, importedAt: new Date().toISOString(), designPoints: validPoints });
+    let projectDraft: Record<string, unknown> = {};
+    try { projectDraft = JSON.parse(window.localStorage.getItem("design-lab-project-draft") || "{}"); } catch { /* keep an empty context */ }
+    window.localStorage.setItem("design-lab-project-draft", JSON.stringify({ ...projectDraft, projectName: projectName.trim(), stage: "review" }));
     window.location.href = "/projects/score";
   };
 
@@ -108,7 +112,7 @@ export default function ImportSolutionPage() {
   };
 
   return <main className="research-page solution-workflow">
-    <DashboardSidebar active="projects" />
+    <DashboardSidebar projectActive />
     <section className="research-main">
       <ProjectTopbar section="导入已有方案" demo="可编辑" />
       <div className="solution-content">
@@ -121,10 +125,10 @@ export default function ImportSolutionPage() {
             <label>方案名称<input value={solutionName} onChange={(e) => setSolutionName(e.target.value)} placeholder="例如：集卡主流程优化方案" /></label>
             <label>版本<input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="例如：V1.0" /></label>
           </div>
-          <div className="solution-source"><label className="file-picker" onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add("dragging"); }} onDragLeave={(event) => event.currentTarget.classList.remove("dragging")} onDrop={(event) => { event.preventDefault(); event.currentTarget.classList.remove("dragging"); void loadFiles(Array.from(event.dataTransfer.files || [])); }}><input type="file" accept="image/*" multiple onChange={chooseFile} /><span>⇧</span><b>{fileName || "拖拽或上传方案截图、流程图"}</b><small>{fileName ? "点击或拖拽可替换，最多 5 张" : "下一步将由 Agent 识别关键设计点"}</small></label>{images.length > 0 && <button className="remove-solution-images" type="button" onClick={() => { setImages([]); setFileName(""); }}>移除</button>}</div>
+          <div className="solution-source"><label className="file-picker" onDragOver={(event) => { event.preventDefault(); event.currentTarget.classList.add("dragging"); }} onDragLeave={(event) => event.currentTarget.classList.remove("dragging")} onDrop={(event) => { event.preventDefault(); event.currentTarget.classList.remove("dragging"); void loadFiles(Array.from(event.dataTransfer.files || [])); }}><input type="file" accept="image/*" multiple onChange={chooseFile} /><span><NightingaleIcon name="arrowUp" size={20} /></span><b>{fileName || "拖拽或上传方案截图、流程图"}</b><small>{fileName ? "点击或拖拽可替换，最多 5 张" : "下一步将由 Agent 识别关键设计点"}</small></label>{images.length > 0 && <button className="remove-solution-images" type="button" onClick={() => { setImages([]); setFileName(""); }}>移除</button>}</div>
           {images.length > 0 && <div className="image-preview-row">{images.map((item) => <figure key={item.name}><img src={item.dataUrl} alt={item.name} /><figcaption>{item.name}</figcaption></figure>)}</div>}
         </section>
-        <footer className="workflow-footer"><button className="secondary-button" type="button" onClick={() => { window.location.href = "/"; }}>取消</button><button className="primary-workflow-button" type="button" onClick={continueToIdentify}>继续识别设计点 →</button></footer>
+        <footer className="workflow-footer"><button className="secondary-button" type="button" onClick={() => { window.location.href = "/"; }}>取消</button><button className="primary-workflow-button" type="button" onClick={continueToIdentify}>继续识别设计点 <NightingaleIcon name="arrowRight" size={18} /></button></footer>
       </div>
     </section>
     {toast && <div className="toast" role="status"><i />{toast}</div>}

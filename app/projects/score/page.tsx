@@ -4,42 +4,45 @@ import { useCallback, useEffect, useState } from "react";
 import DashboardSidebar from "../../components/DashboardSidebar";
 import ProjectTopbar from "../../components/ProjectTopbar";
 import StageProgress from "../../components/StageProgress";
+import NightingaleIcon from "../../components/NightingaleIcon";
 import { personalAgentHeaders } from "../../lib/personalAgentConfig";
-import { readSolution } from "../../lib/localSolutionStore";
+import { readSolutionForProject, solutionReviewStorageKey } from "../../lib/localSolutionStore";
 
 type ReviewCriterion = { name: string; score: number; reason: string };
 type AgentReview = { id: string; criteria: ReviewCriterion[]; verdict: string; keywords: string[]; findings: string[]; gaps: string[]; recommendations: string[] };
 type ReviewResult = { schemaVersion: number; overallScore: number; summary: string; businessGoals: Array<{ goal: string; score: number; finding: string }>; reviews: AgentReview[] };
 
 export default function ScorePage() {
-  const [solution, setSolution] = useState<ReturnType<typeof readSolution>>(null);
+  const [solution, setSolution] = useState<ReturnType<typeof readSolutionForProject>>(null);
   const [result, setResult] = useState<ReviewResult | null>(null);
   const [status, setStatus] = useState("Agent 正在评估方案…");
   const [evaluating, setEvaluating] = useState(false);
 
-  const evaluate = useCallback(async (current: NonNullable<ReturnType<typeof readSolution>>) => {
+  const evaluate = useCallback(async (current: NonNullable<ReturnType<typeof readSolutionForProject>>) => {
     setEvaluating(true); setStatus("Agent 正在结合业务诉求与研究策略评估方案…");
-    let draft: { answers?: Record<string, string[]>; customValues?: Record<string, string> } = {};
+    let draft: { designType?: string; answers?: Record<string, string[]>; customValues?: Record<string, string>; meetingContext?: { keyPoints?: string[]; extractedText?: string; link?: string } } = {};
     try { draft = JSON.parse(window.localStorage.getItem("design-lab-project-draft") || "{}"); } catch { draft = {}; }
     const businessGoals = [...(draft.answers?.goal || []), ...(draft.customValues?.goal?.trim() ? [draft.customValues.goal.trim()] : [])];
-    const response = await fetch("/api/solution-review", { method: "POST", headers: { "content-type": "application/json", ...personalAgentHeaders() }, body: JSON.stringify({ projectName: current.projectName, solutionName: current.solutionName, businessGoals, designPoints: current.designPoints.map((point) => ({ id: point.id, title: point.title, description: point.description, strategy: point.strategy, metrics: point.metrics })) }) }).catch(() => null);
+    const projectContext = { designType: draft.designType, answers: draft.answers || {}, customValues: draft.customValues || {}, meetingKeyPoints: draft.meetingContext?.keyPoints || [], meetingSummary: draft.meetingContext?.extractedText || "", meetingLink: draft.meetingContext?.link || "" };
+    const response = await fetch("/api/solution-review", { method: "POST", headers: { "content-type": "application/json", ...personalAgentHeaders() }, body: JSON.stringify({ projectName: current.projectName, solutionName: current.solutionName, businessGoals, projectContext, designPoints: current.designPoints.map((point) => ({ id: point.id, title: point.title, description: point.description, strategy: point.strategy, metrics: point.metrics })) }) }).catch(() => null);
     const data = await response?.json().catch(() => null);
     if (!response?.ok || !Array.isArray(data?.reviews)) { setStatus(data?.error || "评价失败，请检查 Agent 配置"); setResult(null); }
-    else { const next = { ...data, schemaVersion: 3 }; setResult(next); setStatus("评价完成"); window.localStorage.setItem("design-lab-solution-review", JSON.stringify(next)); }
+    else { const next = { ...data, schemaVersion: 3 }; setResult(next); setStatus("评价完成"); const projectId = window.localStorage.getItem("design-lab-current-project-id") || ""; if (projectId) window.localStorage.setItem(solutionReviewStorageKey(projectId), JSON.stringify({ ...next, projectId })); }
     setEvaluating(false);
   }, []);
 
   useEffect(() => {
-    const current = readSolution(); setSolution(current);
+    const projectId = window.localStorage.getItem("design-lab-current-project-id") || "";
+    const current = readSolutionForProject(projectId); setSolution(current);
     if (!current) return;
-    try { const cached = JSON.parse(window.localStorage.getItem("design-lab-solution-review") || "null"); if (cached?.schemaVersion === 3 && cached?.reviews) { setResult(cached); setStatus("评价完成"); return; } } catch { /* ignore invalid cache */ }
+    try { const cached = JSON.parse(window.localStorage.getItem(solutionReviewStorageKey(projectId)) || "null"); if (cached?.schemaVersion === 3 && cached?.reviews) { setResult(cached); setStatus("评价完成"); return; } } catch { /* ignore invalid cache */ }
     void evaluate(current);
   }, [evaluate]);
 
   return <main className="research-page solution-workflow"><DashboardSidebar projectActive /><section className="research-main"><ProjectTopbar section="方案评价" demo="Agent 评估" /><div className="solution-content">
     <StageProgress steps={["方案评价"]} active={1} />
     <header className="solution-hero"><p>DESIGN REVIEW</p><h1>评估方案能否满足业务诉求。</h1><span>Agent 将业务目标、研究策略、设计动作与预期指标放在同一条判断链上。</span></header>
-    {!solution ? <section className="workflow-empty"><span>⇧</span><h2>还没有导入方案</h2><p>先录入方案和关键设计点，再进行评价。</p><button type="button" onClick={() => { window.location.href = "/projects/import"; }}>导入已有方案</button></section> : <>
+    {!solution ? <section className="workflow-empty"><span><NightingaleIcon name="arrowUp" size={24} /></span><h2>还没有导入方案</h2><p>先录入方案和关键设计点，再进行评价。</p><button type="button" onClick={() => { window.location.href = "/projects/import"; }}>导入已有方案</button></section> : <>
       <section className="review-summary"><div><small>当前方案</small><strong>{solution.solutionName}</strong><span>{solution.version} · {solution.designPoints.length} 个设计点</span></div><div className="coverage"><small>业务诉求匹配度</small><strong>{result ? `${result.overallScore}%` : "—"}</strong><i><b style={{ width: `${result?.overallScore || 0}%` }} /></i></div></section>
       <p className={`agent-review-status ${result ? "ready" : ""}`}><i />{evaluating ? status : result?.summary || status}</p>
       {result?.businessGoals?.length > 0 && <section className="business-fit"><h2>业务诉求</h2><div>{result.businessGoals.map((item) => <article key={item.goal}><strong>{item.goal}</strong><b>{item.score}</b><span>{item.finding}</span></article>)}</div></section>}
@@ -62,7 +65,7 @@ export default function ScorePage() {
           </article>;
         })}</div>
       </section>
-      <footer className="workflow-footer"><button className="secondary-button" type="button" onClick={() => { window.location.href = "/projects/import"; }}>修改方案</button><button className="secondary-button" type="button" disabled={evaluating} onClick={() => { window.localStorage.removeItem("design-lab-solution-review"); void evaluate(solution); }}>{evaluating ? "评估中…" : "重新评估"}</button><button className="primary-workflow-button" type="button" onClick={() => { window.location.href = "/projects/retrospective"; }}>进入上线复盘 →</button></footer>
+      <footer className="workflow-footer"><button className="secondary-button" type="button" onClick={() => { window.location.href = "/projects/import"; }}>修改方案</button><button className="secondary-button" type="button" disabled={evaluating} onClick={() => { const projectId = window.localStorage.getItem("design-lab-current-project-id") || ""; window.localStorage.removeItem(solutionReviewStorageKey(projectId)); void evaluate(solution); }}>{evaluating ? "评估中…" : "重新评估"}</button><button className="primary-workflow-button" type="button" onClick={() => { window.location.href = "/projects/retrospective"; }}>进入上线复盘 <NightingaleIcon name="arrowRight" size={18} /></button></footer>
     </>}
   </div></section></main>;
 }

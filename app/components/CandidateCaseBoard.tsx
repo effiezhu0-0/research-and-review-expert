@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import NightingaleIcon from "./NightingaleIcon";
 import { normalizeDesignField, researchProfiles } from "../lib/researchProfiles";
 
 type Candidate = {
@@ -26,6 +27,8 @@ const sourceNames: Record<string, string> = {
   xiaohongshu: "小红书",
   weibo: "微博",
   voice_of_user: "用户之声",
+  app_store: "App Store",
+  google_play: "Google Play",
 };
 
 export default function CandidateCaseBoard({
@@ -37,6 +40,7 @@ export default function CandidateCaseBoard({
   const [selected, setSelected] = useState<string[]>([]);
   const [taskId, setTaskId] = useState("");
   const [designField, setDesignField] = useState<"interaction" | "brand" | "marketing">("interaction");
+  const [platformFilter, setPlatformFilter] = useState("all");
 
   useEffect(() => {
     let stopped = false;
@@ -108,7 +112,7 @@ export default function CandidateCaseBoard({
             <span className="evidence-selection-mark" aria-hidden="true">{isSelected ? "✓" : ""}</span>
             <div>
               <span>{`${sourceNames[item.source || ""] || "来源"} · ${(item.publishedAt || item.capturedAt).slice(0, 10)}`}</span>
-              {item.url ? <a className="case-source-link" href={item.url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>↗ 查看来源</a> : null}
+              {item.url ? <a className="case-source-link" href={item.url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}><NightingaleIcon name="arrowUpRight" size={14} />查看来源</a> : null}
             </div>
           </div>
           <div className="case-visual evidence-shot">
@@ -120,7 +124,7 @@ export default function CandidateCaseBoard({
                 src={item.mediaKeys?.length
                   ? `/api/research/tasks/${taskId}/candidates/${item.id}/media/0`
                   : `/api/research/tasks/${taskId}/candidates/${item.id}/screenshot`}
-                alt={`${item.title}的来源截图`}
+                alt={`${item.title || `${sourceNames[item.source || ""] || "候选"}正文`}的来源截图`}
                 loading="lazy"
               />
             ) : (
@@ -128,7 +132,7 @@ export default function CandidateCaseBoard({
             )}
           </div>
           <div className="case-body">
-            <h2>{item.title}</h2>
+            {item.title ? <h2>{item.title}</h2> : null}
             <p>{item.excerpt?.slice(0, 180) || "打开完整来源查看候选案例。"}</p>
             {!isStoreCase && <div className="candidate-feedback">
               <small>用户评论</small>
@@ -152,9 +156,12 @@ export default function CandidateCaseBoard({
     </section>
   ) : <div className="evidence-empty brand-evidence-empty"><span>{emptyMessage}</span></div>;
 
-  const feedbackItems = designField === "brand"
-    ? items.filter((item) => item.source !== "app_store" && item.source !== "google_play") : items;
-  const storeItems = items.filter((item) => item.source === "app_store" || item.source === "google_play");
+  const platformItems = platformFilter === "all" ? items : items.filter((item) => item.source === platformFilter);
+  const visibleFeedbackItems = designField === "brand"
+    ? platformItems.filter((item) => item.source !== "app_store" && item.source !== "google_play") : platformItems;
+  const visibleStoreItems = platformItems.filter((item) => item.source === "app_store" || item.source === "google_play");
+  const platformOrder = ["xiaohongshu", "weibo", "voice_of_user", "app_store", "google_play"];
+  const platforms = platformOrder.filter((source) => items.some((item) => item.source === source));
 
   return (
     <>
@@ -165,22 +172,23 @@ export default function CandidateCaseBoard({
         </div>
       </div>
 
-      <div className="filter-row">
-        <div>
-          <button className="active" type="button">全部 {items.length}</button>
-        </div>
+      <div className="filter-row candidate-platform-filter">
+        <nav className="project-overview-tabs candidate-platform-tabs" role="tablist" aria-label="按平台筛选案例">
+          <button className={platformFilter === "all" ? "active" : ""} type="button" role="tab" aria-selected={platformFilter === "all"} onClick={() => setPlatformFilter("all")}>全部 <small>{items.length}</small></button>
+          {platforms.map((source) => <button key={source} className={platformFilter === source ? "active" : ""} type="button" role="tab" aria-selected={platformFilter === source} onClick={() => setPlatformFilter(source)}>{sourceNames[source] || source} <small>{items.filter((item) => item.source === source).length}</small></button>)}
+        </nav>
       </div>
 
       {designField === "brand" ? <div className="brand-evidence-sections">
         <section>
           <header><small>JD DESIGN FEEDBACK</small><h2>京东设计反馈</h2><p>启动图标、启动屏与 App 内界面的真实用户反馈。</p></header>
-          {renderCases(feedbackItems, "暂未收集到与京东设计载体直接相关的反馈。")}
+          {renderCases(visibleFeedbackItems, "暂未收集到与京东设计载体直接相关的反馈。")}
         </section>
         <section>
           <header><small>COMPETITOR STORE CASES</small><h2>App 商店竞品案例</h2><p>进入 App Store 与 Google Play 竞品详情页采集的可追溯案例。</p></header>
-          {renderCases(storeItems, "暂未成功进入 App Store 或 Google Play 的竞品详情页。")}
+          {renderCases(visibleStoreItems, "暂未成功进入 App Store 或 Google Play 的竞品详情页。")}
         </section>
-      </div> : items.length ? renderCases(items, "暂时没有候选案例") : (
+      </div> : platformItems.length ? renderCases(platformItems, "暂时没有候选案例") : (
         <div className="evidence-empty">
           <strong>暂时没有候选案例</strong>
           <span>请先开始研究；Playwright 成功打开帖子后，候选会自动出现在这里。</span>

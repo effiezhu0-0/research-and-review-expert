@@ -1,6 +1,7 @@
 export type SavedProject = {
   id: string;
   taskId: string;
+  taskIds?: string[];
   name: string;
   kind: string;
   stage: string;
@@ -32,10 +33,12 @@ export function readSavedProjects(): SavedProject[] {
 
 export function saveCurrentProject(project: SavedProject) {
   const existing = readSavedProjects();
-  const previous = existing.find((item) => item.id === project.id || item.taskId === project.taskId);
+  const previous = existing.find((item) => item.id === project.id)
+    || existing.find((item) => item.taskId === project.taskId || item.taskIds?.includes(project.taskId));
   const manualStage = previous?.manualStage;
-  const projects = existing.filter((item) => item.id !== project.id && item.taskId !== project.taskId);
-  window.localStorage.setItem(storageKey, JSON.stringify([{ ...project, ...(manualStage ? { stage: manualStage, manualStage } : {}) }, ...projects]));
+  const taskIds = [...new Set([...(previous?.taskIds || []), previous?.taskId, ...(project.taskIds || []), project.taskId].filter((id): id is string => Boolean(id)))];
+  const projects = existing.filter((item) => item.id !== project.id && item.taskId !== project.taskId && !item.taskIds?.includes(project.taskId));
+  window.localStorage.setItem(storageKey, JSON.stringify([{ ...previous, ...project, taskIds, ...(manualStage ? { stage: manualStage, manualStage } : {}) }, ...projects]));
 }
 
 export function updateProjectStage(id: string, stage: string) {

@@ -1,6 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import PersonalAISettings from "./PersonalAISettings";
 import NightingaleIcon, { NightingaleIconName } from "./NightingaleIcon";
 import { deleteSavedProject, openSavedProject, readSavedProjects, renameSavedProject, SavedProject } from "../lib/savedProjects";
@@ -76,7 +77,7 @@ function SidebarProjectItem({ project, active }: { project: SavedProject; active
       <button type="button" role="menuitem" onClick={() => { setName(project.name); setError(""); setRenameOpen(true); setMenuOpen(false); }}>重命名</button>
       <button className="danger" type="button" role="menuitem" onClick={() => { setDeleteOpen(true); setMenuOpen(false); }}>删除项目</button>
     </div>}
-    {renameOpen && <div className="sidebar-project-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRenameOpen(false); }}>
+    {renameOpen && typeof document !== "undefined" && createPortal(<div className="sidebar-project-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRenameOpen(false); }}>
       <form className="sidebar-project-dialog" role="dialog" aria-modal="true" aria-labelledby={`rename-project-title-${project.id}`} onSubmit={saveName}>
         <h2 id={`rename-project-title-${project.id}`}>重命名项目</h2>
         <label htmlFor={`rename-project-input-${project.id}`}>项目名称</label>
@@ -84,14 +85,14 @@ function SidebarProjectItem({ project, active }: { project: SavedProject; active
         {error && <small role="alert">{error}</small>}
         <footer><button type="button" onClick={() => setRenameOpen(false)}>取消</button><button className="primary" type="submit">保存</button></footer>
       </form>
-    </div>}
-    {deleteOpen && <div className="sidebar-project-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setDeleteOpen(false); }}>
+    </div>, document.body)}
+    {deleteOpen && typeof document !== "undefined" && createPortal(<div className="sidebar-project-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setDeleteOpen(false); }}>
       <div className="sidebar-project-dialog" role="alertdialog" aria-modal="true" aria-labelledby={`delete-project-title-${project.id}`}>
         <h2 id={`delete-project-title-${project.id}`}>删除项目</h2>
         <p>确定删除“{project.name}”吗？删除后项目将从项目列表中移除。</p>
         <footer><button type="button" onClick={() => setDeleteOpen(false)}>取消</button><button className="danger-button" type="button" onClick={confirmDelete}>删除</button></footer>
       </div>
-    </div>}
+    </div>, document.body)}
   </div>;
 }
 
@@ -99,21 +100,11 @@ function SidebarProfile({ displayName }: { displayName: string }) {
   return <div className="sidebar-footer"><div className="profile"><span className="avatar">E</span><div><strong>{displayName}</strong></div><PersonalAISettings trigger="menu" /></div></div>;
 }
 
-export default function DashboardSidebar({ active }: DashboardSidebarProps) {
+export default function DashboardSidebar({ active, projectActive = false }: DashboardSidebarProps) {
   const [displayName] = useState("Effie");
   const [projects, setProjects] = useState<SavedProject[]>([]);
   const [activeProjectId, setActiveProjectId] = useState("");
   const go = (path: string) => { window.location.href = path; };
-  const createNewProject = () => {
-    window.localStorage.removeItem("design-lab-project-draft");
-    window.localStorage.removeItem("design-lab-current-project-id");
-    window.localStorage.removeItem("design-lab-active-research-task");
-    window.localStorage.removeItem("design-lab-research-task");
-    window.localStorage.removeItem("design-lab-research-evidence");
-    window.sessionStorage.removeItem("design-lab-start-research");
-    window.location.href = `/projects/new?fresh=${Date.now()}`;
-  };
-
   useEffect(() => {
     queueMicrotask(() => {
       try {
@@ -136,12 +127,11 @@ export default function DashboardSidebar({ active }: DashboardSidebarProps) {
   return (
     <aside className="sidebar">
       <SidebarBrand />
-      <button className="new-project-side" type="button" onClick={createNewProject}><NightingaleIcon name="plus" size={20} />新建项目<kbd>N</kbd></button>
       <nav className="nav" aria-label="主导航">
         {navItem("home", "首页", "home")}
-        <SidebarNavItem label="全部项目" icon="folder" active={active === "projects"} count={projects.length} onClick={() => go("/")} />
+        <SidebarNavItem label="全部项目" icon="folder" active={active === "projects" && !projectActive} count={projects.length} onClick={() => go("/")} />
         {projects.map((project) => (
-          <SidebarProjectItem key={project.id} project={project} active={active === "project" && project.id === activeProjectId} />
+          <SidebarProjectItem key={project.id} project={project} active={(projectActive || active === "project") && project.id === activeProjectId} />
         ))}
         {navItem("favorites", "我的收藏", "star")}
       </nav>

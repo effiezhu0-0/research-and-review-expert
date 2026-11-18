@@ -7,7 +7,7 @@ import { openSavedProject, readSavedProjects, SavedProject, updateProjectStage }
 
 type HomeProject = { saved: SavedProject; name: string; kind: string; stage: string; updated: string; progress: number };
 
-const projectStages = ["背景输入", "竞品调研", "视觉调研", "方案评审", "上线复盘"];
+const projectStages = ["项目需求", "用户研究", "视觉调研", "方案评审", "上线复盘"];
 
 function StageDropdown({ project, onChange }: { project: HomeProject; onChange: (stage: string) => void }) {
   const [open, setOpen] = useState(false);
@@ -47,7 +47,6 @@ function StageDropdown({ project, onChange }: { project: HomeProject; onChange: 
 }
 
 export default function Home() {
-  const [toast, setToast] = useState<string | null>(null);
   const [projects, setProjects] = useState<HomeProject[]>([]);
 
   useEffect(() => {
@@ -65,11 +64,6 @@ export default function Home() {
     });
   }, []);
 
-  const notify = (message: string) => {
-    setToast(message);
-    window.setTimeout(() => setToast(null), 2400);
-  };
-
   const openNewProject = () => {
     window.localStorage.removeItem("design-lab-project-draft");
     window.localStorage.removeItem("design-lab-current-project-id");
@@ -81,56 +75,27 @@ export default function Home() {
     window.sessionStorage.removeItem("design-lab-solution-intake");
     window.location.href = `/projects/new?fresh=${Date.now()}`;
   };
-  const openStageProject = (entry: "import" | "retrospective") => {
-    window.localStorage.removeItem("design-lab-project-draft");
-    window.localStorage.removeItem("design-lab-current-project-id");
-    window.sessionStorage.removeItem("design-lab-solution-intake");
-    window.sessionStorage.setItem("design-lab-entry-source", `homepage-${entry}`);
-    window.location.href = `/projects/new?fresh=${Date.now()}&entry=${entry}`;
-  };
-
   return (
     <main className="app-shell">
       <DashboardSidebar active="home" />
 
       <section className="workspace">
         <header className="topbar">
-          <div className="crumb"><span>工作空间</span><b>/</b><strong>首页</strong></div>
+          <p className="home-greeting">Hello, Effie <span className="coffee-emoji" aria-hidden="true">☕️</span></p>
           <div className="top-actions">
-            <button className="search" type="button">搜索项目和研究资产<kbd>⌘ K</kbd></button>
+            <button className="search" type="button"><NightingaleIcon name="search" size={18} />搜索项目和研究资产</button>
           </div>
         </header>
 
         <div className="content">
-          <section className="welcome">
-            <div>
-              <p><span>早上好，<b>Effie</b></span><i className="coffee-icon" aria-hidden="true" /></p>
-              <h1>让每一次设计都有迹可循</h1>
-            </div>
-          </section>
-
-          <section className="new-project-group">
-            <div className="section-heading">
-              <div><h2>新建项目</h2><span>根据当前项目阶段选择开始方式</span></div>
-            </div>
-            <div className="quick-start" aria-label="新建项目方式">
-              <button className="quick-start-primary" type="button" onClick={openNewProject}>
-                <div><span className="quick-card-kicker">从需求开始</span><strong>创建新项目</strong><span className="quick-card-description"><small>建立研究、策略与方案的共同上下文</small><img src="/arrow-right-regular.svg" alt="" aria-hidden="true" /></span></div>
-              </button>
-              <button type="button" onClick={() => openStageProject("import")}>
-                <div><span className="quick-card-kicker">已有产出</span><strong>导入已有方案</strong><span className="quick-card-description"><small>进入方案评分与优化流程</small><img src="/arrow-right-regular.svg" alt="" aria-hidden="true" /></span></div>
-              </button>
-              <button type="button" onClick={() => openStageProject("retrospective")}>
-                <div><span className="quick-card-kicker">验证判断</span><strong>创建上线复盘</strong><span className="quick-card-description"><small>录入指标并回看设计效果</small><img src="/arrow-right-regular.svg" alt="" aria-hidden="true" /></span></div>
-              </button>
-            </div>
-          </section>
-
           <section className="projects-section">
             <div className="section-heading">
-              <div><h2>最近项目</h2><span>最近使用和创建的项目</span></div>
+              <div><h2>最近项目</h2></div>
               <div className="view-actions">
-                <button type="button" onClick={() => notify("全部项目")}>查看全部</button>
+                <button className="new-project-cta" type="button" onClick={openNewProject}>
+                  <NightingaleIcon name="plus" size={20} />
+                  <span>新项目<kbd>N</kbd></span>
+                </button>
               </div>
             </div>
 
@@ -159,8 +124,6 @@ export default function Home() {
 
         </div>
       </section>
-
-      {toast && <div className="toast" role="status"><i />{toast}</div>}
     </main>
   );
 }

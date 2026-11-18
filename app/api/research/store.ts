@@ -31,6 +31,13 @@ export async function ensureResearchSchema() {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`),
+    DB.prepare(`CREATE TABLE IF NOT EXISTS research_project_tasks (
+      project_id TEXT NOT NULL,
+      task_id TEXT NOT NULL UNIQUE,
+      owner_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (project_id, task_id)
+    )`),
     DB.prepare(`CREATE TABLE IF NOT EXISTS research_evidence (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,

@@ -14,7 +14,6 @@ const workerOwnerId = process.env.WORKER_OWNER_ID || "";
 const workerPairToken = process.env.WORKER_PAIR_TOKEN || "";
 const pollMs = Number(process.env.RESEARCH_POLL_MS || 5000);
 const maxQueries = Number(process.env.RESEARCH_MAX_QUERIES || 3);
-const maxCandidates = Number(process.env.RESEARCH_MAX_CANDIDATES || 9);
 const actionDelayMs = Number(process.env.RESEARCH_ACTION_DELAY_MS || 800);
 const visualDetailsPerTrend = Number(process.env.RESEARCH_VISUAL_DETAILS_PER_TREND || 10);
 const visualDetailsPerPlatform = 40;
@@ -121,6 +120,14 @@ async function updateTask(taskId, status, activity, extra = {}) {
   });
 }
 
+function appendCollectionLog(activity, sourceId, entry) {
+  if (!activity.sourceProgress) activity.sourceProgress = {};
+  const source = activity.sourceProgress[sourceId] || {};
+  const logs = Array.isArray(source.collectionLog) ? source.collectionLog : [];
+  logs.push({ at: new Date().toISOString(), ...entry });
+  activity.sourceProgress[sourceId] = { ...source, collectionLog: logs.slice(-300) };
+}
+
 function projectWords(project) {
   const answers = Object.values(project?.answers || {}).flat();
   const customs = Object.values(project?.customValues || {});
@@ -140,8 +147,8 @@ function buildQueries(project) {
   const supplied = Array.isArray(project?.researchKeywords)
     ? project.researchKeywords.map((value) => String(value || "").trim()).filter(Boolean)
     : [];
-  // A project represents one demand; collect only from explicitly selected research keywords.
-  return [...new Set(supplied)].slice(0, maxQueries);
+  // A project represents one demand; honor every explicitly selected keyword.
+  return [...new Set(supplied)];
 }
 
 function buildCompetitorDiscoveryQueries(project) {
@@ -448,27 +455,69 @@ function voiceFeedbackId(value) {
   try {
     const url = new URL(String(value || ""));
     if (!/(^|\.)new-ux\.jd\.com$/i.test(url.hostname)) return "";
-    return [...url.searchParams.entries()].find(([name, id]) => name.toLowerCase() === "feedbackid" && id.trim())?.[1] || "";
+    const idParams = [...url.searchParams.entries()].find(([name, id]) =>
+      /^(?:feedbackid|feedback_id|id|uuid|issueid|issue_id|problemid|problem_id|questionid|question_id|voiceid|voice_id|ticketid|recordid)$/i.test(name) && id.trim(),
+    );
+    if (idParams) return idParams[1].trim();
+    const hashMatch = url.hash.match(/(?:feedbackid|feedback_id|issueid|problemid|questionid|voiceid|id)=?([\w-]{6,})/i)
+      || url.hash.match(/#\/(?:detail|feedback|issue|problem|question)\/([\w-]{6,})/i);
+    if (hashMatch) return hashMatch[1];
+    const detailPath = url.pathname.match(/\/(?:detail|feedback|issue|problem|question)\/([\w-]{6,})\/?$/i);
+    return detailPath?.[1] || "";
   } catch { return ""; }
 }
 
 async function voiceFeedbackUrl(page, identityText = "") {
-  if (voiceFeedbackId(page.url())) return page.url();
   const identity = canonicalPostText(identityText);
-  const anchors = await page.evaluate((needle) => {
+  const pageUrl = page.url();
+  const pageId = voiceFeedbackId(pageUrl);
+  const evidence = await page.evaluate(({ needle, pageId: currentPageId }) => {
     const clean = (value) => String(value || "").normalize("NFKC").toLocaleLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[\s\p{P}\p{S}]+/gu, "");
-    const matches = [];
-    for (const anchor of document.querySelectorAll("a[href]")) {
-      const rect = anchor.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.top >= innerHeight) continue;
-      const scope = anchor.closest("[role='dialog'], [aria-modal='true'], [class*='modal'], [class*='detail'], [class*='drawer']") || anchor.parentElement;
-      const scopeText = clean(scope?.innerText || anchor.innerText);
-      if (needle.length >= 24 && !scopeText.includes(needle.slice(0, 24))) continue;
-      matches.push(anchor.href);
+    const identityChunks = [needle.slice(0, 36), needle.slice(24, 60), needle.slice(48, 84)].filter((part) => part.length >= 24);
+    const visible = (node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.width > 180 && rect.height > 80 && rect.bottom > 0 && rect.top < innerHeight;
+    };
+    const selectors = [".voice-details", "[role='dialog']", "[aria-modal='true']", "[class*='detail']", "[class*='drawer']", "[class*='modal']", "[class*='feedback-detail']"];
+    const surfaces = [...new Set(selectors.flatMap((selector) => [...document.querySelectorAll(selector)]))]
+      .filter(visible)
+      .map((node) => ({ node, text: clean(node.innerText || "") }))
+      .filter((item) => item.text.length >= 40 && (!identityChunks.length || identityChunks.some((chunk) => item.text.includes(chunk))));
+    const candidates = [];
+    if (currentPageId) candidates.push({ id: currentPageId, url: location.href, source: "page_url" });
+    const idPattern = /^(?:feedbackid|feedback_id|uuid|issueid|issue_id|problemid|problem_id|questionid|question_id|voiceid|voice_id|ticketid|recordid)$/i;
+    const extractFromElement = (node, source) => {
+      for (const attr of [...node.attributes]) {
+        const normalizedName = attr.name.replace(/^data-/, "").replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+        if (!idPattern.test(normalizedName)) continue;
+        const value = String(attr.value || "").trim();
+        if (/^[\w-]{6,}$/.test(value)) candidates.push({ id: value, url: "", source: `${source}:${attr.name}` });
+      }
+    };
+    for (const { node } of surfaces) {
+      extractFromElement(node, "detail_attribute");
+      for (const child of node.querySelectorAll("[feedbackid], [feedback_id], [data-feedback-id], [issueid], [data-issue-id], [uuid], [data-uuid], [questionid], [problemid]")) extractFromElement(child, "detail_attribute");
+      for (const anchor of node.querySelectorAll("a[href]")) {
+        const href = anchor.href;
+        const url = new URL(href, location.href);
+        const id = url.searchParams.get("feedbackId") || url.searchParams.get("feedback_id") || url.searchParams.get("id")
+          || url.searchParams.get("issueId") || url.searchParams.get("questionId")
+          || url.hash.match(/(?:feedbackid|feedback_id|issueid|questionid|id)=?([\w-]{6,})/i)?.[1]
+          || url.pathname.match(/\/(?:detail|feedback|issue|problem|question)\/([\w-]{6,})\/?$/i)?.[1]
+          || "";
+        if (id) candidates.push({ id, url: href, source: "detail_link" });
+      }
     }
-    return [...new Set(matches)];
-  }, identity).catch(() => []);
-  return anchors.find((value) => voiceFeedbackId(value)) || "";
+    const unique = [...new Map(candidates.map((item) => [`${item.id}|${item.url}`, item])).values()];
+    return { detailVisible: surfaces.length > 0, identityMatched: surfaces.length > 0, detailTextLength: Math.max(0, ...surfaces.map((item) => item.text.length)), candidates: unique.slice(0, 20) };
+  }, { needle: identity, pageId }).catch(() => ({ detailVisible: false, identityMatched: false, detailTextLength: 0, candidates: [] }));
+  const candidate = evidence.candidates.find((item) => item.id && (item.url || pageUrl));
+  if (!candidate) return { url: "", feedbackId: "", idSource: "", ...evidence };
+  let url = candidate.url || pageUrl;
+  if (!candidate.url && !voiceFeedbackId(url)) {
+    try { const parsed = new URL(url); parsed.searchParams.set("feedbackId", candidate.id); url = parsed.toString(); } catch {}
+  }
+  return { url, feedbackId: candidate.id, idSource: candidate.source, ...evidence };
 }
 
 function canonicalPostText(value) {
@@ -481,24 +530,82 @@ function canonicalPostText(value) {
 const minimumGameplayPostDate = new Date(2025, 9, 1);
 
 function parsePostDate(text) {
-  const value = String(text || "");
-  const full = value.match(/(20\d{2})[-./年](\d{1,2})(?:[-./月](\d{1,2})日?)?/);
-  if (full) return new Date(Number(full[1]), Number(full[2]) - 1, Number(full[3] || 1));
-  const monthDay = value.match(/(?:^|\D)(\d{1,2})\s*[-./月]\s*(\d{1,2})日?(?:\D|$)/);
+  const value = String(text || "").normalize("NFKC").trim();
+  if (!value) return null;
+  const now = new Date();
+  if (/刚刚|刚才|今天|今日|\d+\s*(?:秒|分钟|分|小时)前/.test(value)) return now;
+  const relativeDays = value.match(/(\d+)\s*(?:天|日)前/);
+  if (relativeDays) {
+    const date = new Date(now);
+    date.setDate(date.getDate() - Number(relativeDays[1]));
+    return date;
+  }
+  const relativeWeeks = value.match(/(\d+)\s*周前/);
+  if (relativeWeeks) {
+    const date = new Date(now);
+    date.setDate(date.getDate() - Number(relativeWeeks[1]) * 7);
+    return date;
+  }
+  const relativeMonths = value.match(/(\d+)\s*个月前/);
+  if (relativeMonths) {
+    const date = new Date(now);
+    date.setMonth(date.getMonth() - Number(relativeMonths[1]));
+    return date;
+  }
+  const relativeYears = value.match(/(\d+)\s*年前/);
+  if (relativeYears) {
+    const date = new Date(now);
+    date.setFullYear(date.getFullYear() - Number(relativeYears[1]));
+    return date;
+  }
+  if (/昨天|昨日/.test(value)) {
+    const date = new Date(now);
+    date.setDate(date.getDate() - 1);
+    return date;
+  }
+  if (/前天|前日/.test(value)) {
+    const date = new Date(now);
+    date.setDate(date.getDate() - 2);
+    return date;
+  }
+  const full = value.match(/(20\d{2})\s*[-./年]\s*(\d{1,2})(?:\s*[-./月]\s*(\d{1,2})\s*日?)?/);
+  if (full) {
+    const date = new Date(Number(full[1]), Number(full[2]) - 1, Number(full[3] || 1));
+    if (date.getFullYear() !== Number(full[1]) || date.getMonth() !== Number(full[2]) - 1 || date.getDate() !== Number(full[3] || 1)) return null;
+    return date;
+  }
+  const monthDay = value.match(/^\s*(\d{1,2})\s*[-./月]\s*(\d{1,2})\s*日?(?:\s+\d{1,2}:\d{2})?\s*$/);
   if (monthDay) {
-    const now = new Date();
     let year = now.getFullYear();
     const date = new Date(year, Number(monthDay[1]) - 1, Number(monthDay[2]));
+    if (date.getMonth() !== Number(monthDay[1]) - 1 || date.getDate() !== Number(monthDay[2])) return null;
     if (date > now) date.setFullYear(year - 1);
     return date;
   }
-  const relative = value.match(/今天|昨天|前天/);
-  if (relative) {
-    const date = new Date();
-    date.setDate(date.getDate() - ({ 今天: 0, 昨天: 1, 前天: 2 }[relative[0]] || 0));
-    return date;
-  }
+  if (/^\s*\d{1,2}:\d{2}\s*$/.test(value)) return now;
   return null;
+}
+
+function postDateEvidence(text, source = "unknown") {
+  const raw = String(text || "").replace(/\s+/g, " ").trim();
+  const date = parsePostDate(raw);
+  return {
+    raw: raw || "",
+    source,
+    parsed: date && !Number.isNaN(date.getTime())
+      ? String(date.getFullYear()).padStart(4, "0") + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0")
+      : "",
+  };
+}
+
+function isDateInProjectRange(dateText, project = {}) {
+  const date = parsePostDate(dateText);
+  if (!date || Number.isNaN(date.getTime())) return null;
+  const published = String(date.getFullYear()).padStart(4, "0") + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0");
+  const start = String(project.feedbackStartDate || "").trim();
+  const end = String(project.feedbackEndDate || "").trim();
+  if (!start || !end) return date >= minimumGameplayPostDate;
+  return published >= start && published <= end;
 }
 
 function normalizedPostDate(text) {
@@ -520,6 +627,30 @@ function isWithinFeedbackDateRange(text, project = {}) {
   const end = String(project.feedbackEndDate || "").trim();
   if (!start || !end) return date >= minimumGameplayPostDate;
   return published >= start && published <= end;
+}
+
+function classifyPureMutualAidPost(title, body, comments = []) {
+  const content = [title, body, ...comments].filter(Boolean).join(" ").normalize("NFKC");
+  const aidPatterns = [
+    /求助力|求回关|找队友|招队友|帮忙点|帮忙助力/,
+    /(?:求|找|差|缺|还差).{0,12}(?:互助|助力|互点|队友|组队|邀请|互换)/,
+    /(?:互助|助力|组队|邀请|互换).{0,12}(?:求|找|差人|帮忙|拉我|互换)/,
+    /(?:还差|差).{0,12}(?:求|帮忙|助力|点一下|拉我)|求.{0,12}(?:帮忙|助力|点一下|互助|回关|互点)/,
+  ];
+  const feedbackPatterns = [
+    /不好用|难用|好用|体验(?:差|不好|不错|很好)|满意|不满意|喜欢|失望|好难|太难|太麻烦|太复杂|太费劲|太折腾/,
+    /找不到|看不懂|不清楚|规则不明|入口.{0,6}(?:难找|不明显)|(?:闪退|卡顿|卡住|加载失败|无法.{0,8}(?:领取|兑换|进入|打开|完成))/,
+    /(?:问题|故障|错误|bug|建议|希望|最好|应该|需要增加|优化|改进|改版|修复)/i,
+    /(?:邀请|助力|互助|任务|奖励|兑换|活动).{0,12}(?:太多|太少|太难|不合理|不方便|不明确|不一致|失败|麻烦|繁琐)/,
+    /(?:邀请多少人|找了\s*\d+\s*个人|邀请.{0,8}才能|还差\s*\d+(?:\.\d+)?\s*(?:分|元|个)?\s*(?:才能|才可以))/,
+  ];
+  const aidEvidence = aidPatterns.map((pattern) => content.match(pattern)?.[0]).filter(Boolean);
+  const feedbackEvidence = feedbackPatterns.map((pattern) => content.match(pattern)?.[0]).filter(Boolean);
+  return {
+    isPureMutualAid: aidEvidence.length > 0 && feedbackEvidence.length === 0,
+    aidEvidence: [...new Set(aidEvidence)].slice(0, 6),
+    feedbackEvidence: [...new Set(feedbackEvidence)].slice(0, 6),
+  };
 }
 
 async function pageGuard(page) {
@@ -791,8 +922,45 @@ async function fillCommunitySearchInput(page, spec, query, { activate = false } 
   }
 }
 
-async function searchCommunityCards(page, spec, query) {
+async function submitWeiboSearch(page, input) {
+  const expected = String(await input.inputValue({ timeout: 3000 }).catch(() => "")).trim();
+  if (!expected) throw new Error("微博搜索词为空，未提交");
+
+  // Prefer the submit control associated with the header search field. Some
+  // Weibo layouts use a form button; others expose an icon-only search button.
+  const form = input.locator("xpath=ancestor::form[1]");
+  const formSubmit = form.locator("button[type='submit'], input[type='submit'], [role='button'][type='submit']").filter({ visible: true }).first();
+  if (await form.count().catch(() => 0) && await formSubmit.isVisible().catch(() => false)) {
+    await formSubmit.click({ timeout: 3000 });
+    return "button";
+  }
+
+  const searchButtons = page.locator([
+    "button[aria-label*='搜']", "[role='button'][aria-label*='搜']", "button[title*='搜']",
+    "[class*='search-icon']", "[class*='Search_icon']", "[class*='searchBtn']", "[class*='search-btn']",
+  ].join(", ")).filter({ visible: true });
+  const count = await searchButtons.count().catch(() => 0);
+  for (let index = 0; index < Math.min(count, 10); index += 1) {
+    const button = searchButtons.nth(index);
+    const inHeader = await button.evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.top >= 0 && rect.top < 110 && rect.width > 0 && rect.height > 0;
+    }).catch(() => false);
+    if (!inHeader) continue;
+    await button.click({ timeout: 3000 });
+    return "button";
+  }
+
+  // If this layout has no identifiable search icon, submit from the verified
+  // search field as a fallback.
+  await input.press("Enter", { timeout: 3000 });
+  return "enter";
+}
+
+async function searchCommunityCards(page, spec, query, project) {
   let activePage = page;
+  let searchConfirmed = spec.id !== "weibo" && spec.id !== "voiceOfUser";
+  let confirmationMethod = searchConfirmed ? "search_input_or_direct_route" : "not_confirmed";
   await page.goto(spec.home, { waitUntil: "domcontentloaded", timeout: 25000 }).catch(() => {});
   await page.waitForTimeout(1300);
   if (await requiresPlatformLogin(page, spec, { waitForRedirect: true })) throw new LoginRequiredError(spec.name, page.url() || spec.home);
@@ -808,11 +976,15 @@ async function searchCommunityCards(page, spec, query) {
     }, { previousUrl, query }, { timeout: 8000 }).then(() => true, () => false);
     if (await requiresPlatformLogin(page, spec, { waitForRedirect: true })) throw new LoginRequiredError(spec.name, page.url() || spec.home);
     if (!enteredResults) throw new Error("用户之声未确认进入搜索结果，已停止采集。");
-    await setVoiceOfUserDateRange(page, task.project?.feedbackStartDate, task.project?.feedbackEndDate);
+    searchConfirmed = true;
+    confirmationMethod = page.url() !== previousUrl ? "url_changed" : "results_text_visible";
+    await setVoiceOfUserDateRange(page, project?.feedbackStartDate, project?.feedbackEndDate);
   } else if (spec.id === "weibo") {
     search = await fillCommunitySearchInput(page, spec, query, { activate: true });
-    const popupPromise = page.waitForEvent("popup", { timeout: 5000 }).catch(() => null);
-    await search.press("Enter");
+    const actualQuery = String(await search.inputValue({ timeout: 3000 }).catch(() => "")).trim();
+    if (actualQuery !== query) throw new Error(`微博搜索词校验失败：期望“${query}”，实际为“${actualQuery}”`);
+    let popupPromise = page.waitForEvent("popup", { timeout: 1800 }).catch(() => null);
+    await submitWeiboSearch(page, search);
     const popup = await popupPromise;
     if (popup) {
       activePage = popup;
@@ -821,37 +993,65 @@ async function searchCommunityCards(page, spec, query) {
     // Weibo may remove spaces from the submitted phrase in its q parameter
     // (e.g. "JOY游记 互动活动" becomes "JOY游记互动活动").
     const normalizedQuery = String(query).normalize("NFKC").replace(/\s+/g, "");
-    const deadline = Date.now() + 10000;
     let enteredResults = false;
-    while (Date.now() < deadline) {
-      const resultPage = page.context().pages().find((candidatePage) => {
-        try {
-          const url = new URL(candidatePage.url());
-          const q = String(url.searchParams.get("q") || "").normalize("NFKC").replace(/\s+/g, "");
-          return url.hostname === "s.weibo.com" && url.pathname.startsWith("/weibo")
-            && (q === normalizedQuery || q.includes(normalizedQuery));
-        } catch { return false; }
-      });
-      if (resultPage) {
-        activePage = resultPage;
-        enteredResults = true;
-        break;
-      }
-      // Some Weibo layouts keep the search phrase in the page body rather than
-      // the URL; accept that only when the visible result page is already open.
+    const findResultPage = () => page.context().pages().find((candidatePage) => {
+      try {
+        const url = new URL(candidatePage.url());
+        const q = String(url.searchParams.get("q") || "").normalize("NFKC").replace(/\s+/g, "");
+        return url.hostname === "s.weibo.com" && url.pathname.startsWith("/weibo")
+          && (q === normalizedQuery || q.includes(normalizedQuery));
+      } catch { return false; }
+    });
+    const findConfirmedResultsPage = async () => {
+      const byUrl = findResultPage();
+      if (byUrl) return byUrl;
       for (const candidatePage of page.context().pages()) {
         if (!/s\.weibo\.com\/weibo/.test(candidatePage.url())) continue;
         const text = await candidatePage.locator("body").innerText({ timeout: 1000 }).catch(() => "");
-        if (text.includes(query) && /搜索结果|综合|实时/.test(text)) {
-          activePage = candidatePage;
-          enteredResults = true;
-          break;
+        if (text.includes(query) && /搜索结果|综合|实时/.test(text)) return candidatePage;
+      }
+      return null;
+    };
+    const waitForResultPage = async (duration) => {
+      const deadline = Date.now() + duration;
+      while (Date.now() < deadline) {
+        const resultPage = await findConfirmedResultsPage();
+        if (resultPage) {
+          activePage = resultPage;
+          return true;
+        }
+        await page.waitForTimeout(250);
+      }
+      return false;
+    };
+    enteredResults = await waitForResultPage(2500);
+    if (!enteredResults) {
+      // A filled header field can leave Weibo showing suggestions without
+      // submitting. Retry once with Enter after rechecking the same query.
+      search = await locateCommunitySearchInput(page, spec, { activate: true });
+      if (search) {
+        const retryQuery = String(await search.inputValue({ timeout: 3000 }).catch(() => "")).trim();
+        if (retryQuery !== query) {
+          await search.fill(query, { timeout: 5000 });
+          const filledQuery = String(await search.inputValue({ timeout: 3000 }).catch(() => "")).trim();
+          if (filledQuery !== query) throw new Error(`微博重试搜索词校验失败：期望“${query}”，实际为“${filledQuery}”`);
+        }
+        popupPromise = page.waitForEvent("popup", { timeout: 1800 }).catch(() => null);
+        await search.press("Enter", { timeout: 3000 });
+        const retryPopup = await popupPromise;
+        if (retryPopup) {
+          activePage = retryPopup;
+          await retryPopup.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+        }
+        const retryDeadline = Date.now() + 10000;
+        while (!enteredResults && Date.now() < retryDeadline) {
+          enteredResults = await waitForResultPage(300);
         }
       }
-      if (enteredResults) break;
-      await page.waitForTimeout(250);
     }
     if (!enteredResults) throw new Error("微博按回车后未确认进入该关键词的搜索结果页，已停止采集。");
+    searchConfirmed = true;
+    confirmationMethod = findResultPage() ? "results_url_query_matches" : "results_text_matches";
     await activePage.waitForTimeout(900);
   } else if (search) {
     search = await fillCommunitySearchInput(page, spec, query).catch(() => null);
@@ -878,8 +1078,18 @@ async function searchCommunityCards(page, spec, query) {
     : spec.id === "voiceOfUser" && voiceCards
       ? ".user-voice-card-wrapper"
       : "article, [class*='issue'], [class*='feedback'], [class*='card'], [class*='item']";
-  for (let step = 0; step < 10; step += 1) {
-    const cards = await activePage.locator(selector).evaluateAll((nodes, specId) => {
+  let scrollSteps = 0;
+  let noNewResultRounds = 0;
+  let stopReason = "达到页面滚动安全上限";
+  let selectorMatches = 0;
+  let acceptedCardsInOnePass = 0;
+  const rejectedByReasonTotals = {};
+  const rejectionSampleMap = new Map();
+  const maxScrollSteps = 60;
+  for (let step = 0; step <= maxScrollSteps; step += 1) {
+    const previousCount = found.size;
+    selectorMatches = Math.max(selectorMatches, await activePage.locator(selector).count().catch(() => 0));
+    const extracted = await activePage.locator(selector).evaluateAll((nodes, specId) => {
       const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
       return nodes.map((node, nodeIndex) => {
         const rect = node.getBoundingClientRect();
@@ -893,24 +1103,82 @@ async function searchCommunityCards(page, spec, query) {
         const sourceUrl = specId === "weibo"
           ? (links.find((href) => /\/(?:detail|status|comment)\//i.test(href) || /\/\d{5,}\/[a-z\d]{5,}/i.test(new URL(href).pathname)) || "")
           : url;
-        const postText = specId === "weibo" ? clean(node.querySelector("[node-type='feed_list_content'], .txt, [class*='feed_list_content']")?.innerText || text) : text;
+        const postBodyNode = specId === "weibo"
+          ? node.querySelector("[node-type='feed_list_content'], [node-type='feed_list_content'] .txt, .txt[node-type='feed_list_content'], .WB_text, [class*='feed_list_content']")
+          : null;
+        // Weibo posts have no independent title. Use the actual post body as
+        // identity text and leave the source-title field empty; generic title
+        // selectors often match a tiny UI label (for example a 2-char badge).
+        const postText = specId === "weibo"
+          ? clean(postBodyNode?.innerText || postBodyNode?.textContent || node.querySelector(".txt")?.innerText || "")
+          : text;
         const author = specId === "weibo" ? clean(node.querySelector("a[namecard], .name, [class*='name']")?.textContent || "") : "";
-        return { nodeIndex, url, sourceUrl, feedbackId: "", title: clean(node.querySelector("h1,h2,h3,[class*='title']")?.textContent || text.split(" ").slice(0, 20).join(" ")).slice(0, 160), text: text.slice(0, 2200), identityText: postText.slice(0, 1800), author, visible: rect.width > 240 && rect.height > 100 && rect.bottom > 0 && rect.top < innerHeight };
-      }).filter((card) => card.visible && card.title.length >= 8 && card.text.length >= 30);
+        const title = specId === "weibo" ? "" : clean(node.querySelector("h1,h2,h3,[class*='title']")?.textContent || text.split(" ").slice(0, 20).join(" ")).slice(0, 160);
+        const visible = rect.width > 240 && rect.height > 100 && rect.bottom > 0 && rect.top < innerHeight;
+        const rejectionReasons = [];
+        if (!visible) rejectionReasons.push("not_visible_or_too_small");
+        if (specId === "weibo") {
+          if (postText.length < 4) rejectionReasons.push("weibo_post_body_missing_or_too_short");
+        } else {
+          if (title.length < 8) rejectionReasons.push("title_too_short");
+          if (text.length < 30) rejectionReasons.push("text_too_short");
+        }
+        return {
+          card: { nodeIndex, url, sourceUrl, feedbackId: "", title, text: text.slice(0, 2200), identityText: postText.slice(0, 1800), author, visible },
+          rejectionReasons,
+          diagnostic: { nodeIndex, className: String(node.className || "").slice(0, 100), width: Math.round(rect.width), height: Math.round(rect.height), inViewport: rect.bottom > 0 && rect.top < innerHeight, titleLength: title.length, postBodyLength: postText.length, textLength: text.length },
+        };
+      });
     }, spec.id).catch(() => []);
+    const cards = extracted.filter((item) => !item.rejectionReasons.length).map((item) => item.card);
+    const rejectedByReason = {};
+    for (const item of extracted) for (const reason of item.rejectionReasons) rejectedByReason[reason] = Number(rejectedByReason[reason] || 0) + 1;
+    for (const [reason, count] of Object.entries(rejectedByReason)) rejectedByReasonTotals[reason] = Math.max(rejectedByReasonTotals[reason] || 0, count);
+    for (const item of extracted.filter((entry) => entry.rejectionReasons.length)) {
+      if (rejectionSampleMap.size >= 8) break;
+      if (!rejectionSampleMap.has(item.diagnostic.nodeIndex)) rejectionSampleMap.set(item.diagnostic.nodeIndex, { ...item.diagnostic, reasons: item.rejectionReasons });
+    }
+    acceptedCardsInOnePass = Math.max(acceptedCardsInOnePass, cards.length);
     for (const card of cards) {
       const key = `${card.title}:${(card.identityText || card.text).slice(0, 160)}`;
       if (!found.has(key)) found.set(key, card);
     }
-    if (found.size >= 12) break;
+    noNewResultRounds = found.size === previousCount ? noNewResultRounds + 1 : 0;
+    if (!found.size && step >= 2) {
+      const pageText = await activePage.locator("body").innerText({ timeout: 1500 }).catch(() => "");
+      if (/暂无结果|没有找到|未找到相关/.test(pageText)) {
+        stopReason = "平台显示没有搜索结果";
+        break;
+      }
+    }
+    if (noNewResultRounds >= 3) {
+      stopReason = "连续3轮滚动未发现新结果";
+      break;
+    }
+    if (step === maxScrollSteps) break;
     await activePage.mouse.wheel(0, 900);
     await activePage.waitForTimeout(700);
+    scrollSteps += 1;
   }
   if (spec.id === "voiceOfUser") {
     await activePage.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" })).catch(() => {});
     await activePage.waitForTimeout(300);
   }
-  return { cards: [...found.values()], page: activePage };
+  const pageTitle = await activePage.title().catch(() => "");
+  return {
+    cards: [...found.values()], page: activePage, scrollSteps, stopReason,
+    diagnostics: {
+      searchConfirmed,
+      confirmationMethod,
+      pageUrl: activePage.url(),
+      pageTitle,
+      selector,
+      selectorMatches,
+      acceptedCardsInOnePass,
+      rejectedByReason: rejectedByReasonTotals,
+      rejectionSamples: [...rejectionSampleMap.values()],
+    },
+  };
 }
 
 async function expandWeiboComments(page, postCard = page.locator("body")) {
@@ -964,7 +1232,7 @@ async function openVoiceOfUserDetail(resultsPage, card, agent) {
     : "article, [class*='issue'], [class*='feedback'], [class*='card'], [class*='item']";
   const candidateCards = resultsPage.locator(selector);
   const textNeedle = canonicalPostText(card.identityText || card.text).slice(0, 72);
-  if (textNeedle.length < 24) return { page: resultsPage, popup: null, opened: false, originalUrl: resultsPage.url() };
+  if (textNeedle.length < 24) return { page: resultsPage, popup: null, opened: false, originalUrl: resultsPage.url(), diagnostics: { failurePhase: "card_identity_too_short", selector, textNeedleLength: textNeedle.length } };
   const findCardIndex = () => candidateCards.evaluateAll((nodes, args) => {
     const normalize = (value) => String(value || "").normalize("NFKC").toLocaleLowerCase().replace(/https?:\/\/\S+/g, "").replace(/[\s\p{P}\p{S}]+/gu, "");
     const matches = nodes.map((node, index) => {
@@ -986,10 +1254,11 @@ async function openVoiceOfUserDetail(resultsPage, card, agent) {
     await resultsPage.mouse.wheel(0, Math.max(600, Math.round((await resultsPage.evaluate(() => innerHeight).catch(() => 800)) * 0.75)));
     await resultsPage.waitForTimeout(250);
   }
-  if (cardIndex < 0) return { page: resultsPage, popup: null, opened: false, originalUrl: resultsPage.url() };
+  if (cardIndex < 0) return { page: resultsPage, popup: null, opened: false, originalUrl: resultsPage.url(), diagnostics: { failurePhase: "matching_card_not_mounted", selector, candidateCount: await candidateCards.count().catch(() => 0), textNeedleLength: textNeedle.length, finalUrl: resultsPage.url().slice(0, 500) } };
   const cardLocator = candidateCards.nth(cardIndex);
-  if (!await cardLocator.count().catch(() => 0)) return { page: resultsPage, popup: null, opened: false, originalUrl: resultsPage.url() };
+  if (!await cardLocator.count().catch(() => 0)) return { page: resultsPage, popup: null, opened: false, originalUrl: resultsPage.url(), diagnostics: { failurePhase: "matching_card_disappeared", selector, cardIndex, finalUrl: resultsPage.url().slice(0, 500) } };
   const originalUrl = resultsPage.url();
+  const originalFeedbackId = voiceFeedbackId(originalUrl);
   const pagesBeforeClick = new Set(resultsPage.context().pages());
   await cardLocator.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
   const popupPromise = resultsPage.waitForEvent("popup", { timeout: 2500 }).catch(() => null);
@@ -1003,13 +1272,24 @@ async function openVoiceOfUserDetail(resultsPage, card, agent) {
   const clickText = String(card.identityText || card.text).trim().slice(0, 48);
   const bodyTextTarget = clickText.length >= 12 ? cardLocator.getByText(clickText, { exact: false }).first() : null;
   const canClickBody = bodyTextTarget && await bodyTextTarget.isVisible().catch(() => false);
-  if (hasTitleTarget) await titleTarget.click({ timeout: 5000 }).catch(() => {});
-  else if (canClickBody) await bodyTextTarget.click({ timeout: 5000 }).catch(() => cardLocator.click({ timeout: 5000 }).catch(() => {}));
-  else await cardLocator.click({ position: { x: 24, y: 28 }, timeout: 5000 }).catch(() => {});
+  const clickTarget = hasTitleTarget ? ".feedback-title" : canClickBody ? "matching_card_text" : "card_fallback";
+  let clickError = "";
+  let clickFallbackError = "";
+  try {
+    if (hasTitleTarget) await titleTarget.click({ timeout: 5000 });
+    else if (canClickBody) await bodyTextTarget.click({ timeout: 5000 }).catch(async (error) => { clickFallbackError = String(error?.message || error).slice(0, 180); await cardLocator.click({ timeout: 5000 }); });
+    else await cardLocator.click({ position: { x: 24, y: 28 }, timeout: 5000 });
+  } catch (error) { clickError = String(error?.message || error).slice(0, 180); }
   let popup = await popupPromise;
   const deadline = Date.now() + 15000;
+  const waitStartedAt = Date.now();
   let detailPage = popup || resultsPage;
   let actualFeedbackUrl = "";
+  let actualFeedbackId = "";
+  let actualIdSource = "";
+  let latestDetailEvidence = { detailVisible: false, identityMatched: false, detailTextLength: 0, candidates: [] };
+  let identityMatchedOnSameUrl = false;
+  let observedPageUrls = [];
   while (Date.now() < deadline) {
     // Usually JD opens an in-page modal and pushes feedbackId into the current
     // URL. Keep newly-created tabs in scope too, in case this account/layout
@@ -1018,13 +1298,20 @@ async function openVoiceOfUserDetail(resultsPage, card, agent) {
     const pages = [...new Set([resultsPage, ...(popup ? [popup] : []), ...newlyOpenedPages])];
     let matchingPage = null;
     for (const candidate of pages) {
-      const candidateUrl = await voiceFeedbackUrl(candidate, card.identityText || card.text);
-      if (candidateUrl && (candidate !== resultsPage || candidate.url() !== originalUrl)) {
+      const candidateEvidence = await voiceFeedbackUrl(candidate, card.identityText || card.text);
+      const sameResultsUrl = candidate === resultsPage && candidate.url() === originalUrl;
+      const detailMatches = Boolean(candidateEvidence.feedbackId && candidateEvidence.detailVisible && candidateEvidence.identityMatched);
+      latestDetailEvidence = candidateEvidence;
+      if (candidateEvidence.feedbackId && candidateEvidence.url && detailMatches) {
         matchingPage = candidate;
-        actualFeedbackUrl = candidateUrl;
+        actualFeedbackUrl = candidateEvidence.url;
+        actualFeedbackId = candidateEvidence.feedbackId;
+        actualIdSource = candidateEvidence.idSource;
+        identityMatchedOnSameUrl = sameResultsUrl && detailMatches;
         break;
       }
     }
+    observedPageUrls = pages.slice(0, 6).map((candidate) => ({ url: candidate.url().slice(0, 500), feedbackId: voiceFeedbackId(candidate.url()) || "" }));
     if (matchingPage) {
       detailPage = matchingPage;
       if (matchingPage !== resultsPage) popup = matchingPage;
@@ -1033,10 +1320,31 @@ async function openVoiceOfUserDetail(resultsPage, card, agent) {
     await resultsPage.waitForTimeout(200);
   }
   if (popup) await popup.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
-  const opened = Boolean(voiceFeedbackId(actualFeedbackUrl));
+  const opened = Boolean(actualFeedbackId && actualFeedbackUrl);
   if (!opened && popup) await popup.close().catch(() => {});
   if (!opened && !popup) await resultsPage.keyboard.press("Escape").catch(() => {});
-  return { page: detailPage, popup, opened, originalUrl, feedbackId: voiceFeedbackId(actualFeedbackUrl), feedbackUrl: actualFeedbackUrl };
+  return {
+    page: detailPage, popup, opened, originalUrl, feedbackId: actualFeedbackId, feedbackUrl: actualFeedbackUrl,
+    diagnostics: {
+      clickTarget,
+      clickError: clickError || undefined,
+      clickFallbackError: clickFallbackError || undefined,
+      originalUrl: originalUrl.slice(0, 500),
+      originalFeedbackId: originalFeedbackId || undefined,
+      observedFeedbackId: actualFeedbackId || undefined,
+      feedbackIdSource: actualIdSource || undefined,
+      detailVisible: latestDetailEvidence.detailVisible,
+      detailIdentityMatched: Boolean(actualFeedbackId && (identityMatchedOnSameUrl || latestDetailEvidence.identityMatched)),
+      detailTextLength: latestDetailEvidence.detailTextLength || 0,
+      idCandidates: (latestDetailEvidence.candidates || []).map(({ id, source }) => ({ id: id ? `${id.slice(0, 4)}…` : "", source })),
+      finalUrl: detailPage.url().slice(0, 500),
+      feedbackUrl: actualFeedbackUrl.slice(0, 500) || undefined,
+      identityMatchedOnSameUrl,
+      newPageCount: resultsPage.context().pages().filter((candidate) => !pagesBeforeClick.has(candidate)).length,
+      waitMs: Date.now() - waitStartedAt,
+      observedPageUrls,
+    },
+  };
 }
 
 async function readVoiceFeedbackDetail(page, identityText) {
@@ -1194,6 +1502,7 @@ async function collectCommunityPlatform(context, task, spec, queries, agent, act
   let openedDetails = 0;
   let eligible = 0;
   let currentQueryIndex = 0;
+  let currentQuery = "";
   const skipped = {};
   activity.sourceProgress ||= {};
   const syncProgress = (phase = "reading") => {
@@ -1203,42 +1512,78 @@ async function collectCommunityPlatform(context, task, spec, queries, agent, act
       browsed, reviewed, opened: openedDetails, eligible, saved, skipped: { ...skipped },
     };
   };
-  const skip = (reason) => {
+  const skip = (reason, context = {}) => {
     skipped[reason] = Number(skipped[reason] || 0) + 1;
+    appendCollectionLog(activity, spec.id, {
+      type: "skipped",
+      query: currentQuery,
+      reason,
+      title: String(context.title || "").slice(0, 160) || undefined,
+      url: String(context.url || "").slice(0, 500) || undefined,
+      detail: String(context.detail || "").slice(0, 240) || undefined,
+      stage: context.stage || "candidate_validation",
+      metadata: context.metadata && typeof context.metadata === "object" ? context.metadata : undefined,
+    });
     syncProgress();
   };
   let holdForLogin = false;
-  const platformQueries = spec.id === "voiceOfUser" && String(task.project?.projectName || "").trim()
-    ? [String(task.project.projectName).trim()]
-    : queries;
-  const detailLimitPerQuery = spec.id === "voiceOfUser" ? 20 : 10;
-  // User Voice is intentionally allowed to inspect the first 20 result
-  // details. Other community sources retain their existing limit.
-  const target = platformQueries.length * detailLimitPerQuery;
+  // All platforms must search only the keywords the user selected in setup.
+  // Using the project name here caused Voice of User to search a different,
+  // often unrelated phrase and then discard results against the selected terms.
+  const platformQueries = queries;
+  const queryCoverage = [];
+  activity.sourceProgress[spec.id] = {
+    ...activity.sourceProgress[spec.id],
+      browsed: 0, reviewed: 0, opened: 0, eligible: 0, saved: 0, skipped: {}, queryCoverage,
+  };
   try {
     await page.goto(spec.home, { waitUntil: "domcontentloaded", timeout: 25000 }).catch(() => {});
     if (await requiresPlatformLogin(page, spec, { waitForRedirect: true })) throw new LoginRequiredError(spec.name, page.url() || spec.home);
-    for (currentQueryIndex = 0; currentQueryIndex < platformQueries.length && saved < target; currentQueryIndex += 1) {
+    for (currentQueryIndex = 0; currentQueryIndex < platformQueries.length; currentQueryIndex += 1) {
       const query = platformQueries[currentQueryIndex];
+      currentQuery = query;
       activity.sourceProgress[spec.id] = { ...activity.sourceProgress[spec.id], phase: "searching", progress: Math.round((currentQueryIndex / platformQueries.length) * 100), queryIndex: currentQueryIndex + 1, queryTotal: platformQueries.length, browsed, reviewed, opened: openedDetails, eligible, saved, skipped: { ...skipped } };
       await updateTask(task.id, "running", activity);
-      const result = await searchCommunityCards(page, spec, query);
+      const result = await searchCommunityCards(page, spec, query, task.project);
       page = result.page;
       const cards = result.cards;
+      const coverage = {
+        query,
+        sort: "平台默认排序",
+        resultsBrowsed: cards.length,
+        detailsAttempted: 0,
+        detailsOpened: 0,
+        saved: 0,
+        scrollSteps: result.scrollSteps,
+        stopReason: result.stopReason,
+        diagnostics: result.diagnostics,
+      };
+      queryCoverage.push(coverage);
+      appendCollectionLog(activity, spec.id, {
+        type: "search",
+        query,
+        reason: cards.length ? "search_results_loaded" : result.diagnostics.selectorMatches ? "cards_not_accepted" : "no_result_cards_detected",
+        stage: "search_results",
+        detail: cards.length
+          ? `识别到 ${cards.length} 条结果卡片。`
+          : result.diagnostics.selectorMatches
+            ? `页面匹配到 ${result.diagnostics.selectorMatches} 个候选节点，但没有节点通过可见性和文本长度筛选。`
+            : "页面上没有匹配到当前平台的结果卡片选择器。",
+        metadata: result.diagnostics,
+      });
+      activity.sourceProgress[spec.id].queryCoverage = [...queryCoverage];
+      await updateTask(task.id, "running", activity);
       browsed += cards.length;
       syncProgress("reading");
       await updateTask(task.id, "running", activity);
       const bodyText = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "");
       if (spec.loginPattern.test(bodyText)) throw new LoginRequiredError(spec.name, page.url() || spec.home);
-      let detailsViewedThisQuery = 0;
       for (const card of cards) {
-        if (detailsViewedThisQuery >= detailLimitPerQuery) break;
         const identityKey = `${card.title}:${card.text.slice(0, 120)}`;
-        if (saved >= target) break;
-        if (seen.has(identityKey)) { skip("duplicate_in_run"); continue; }
-        if (spec.id !== "voiceOfUser" && spec.id !== "weibo" && !card.url) { skip("missing_post_url"); continue; }
+        if (seen.has(identityKey)) { skip("duplicate_in_run", { title: card.title, url: card.sourceUrl || card.url, stage: "dedupe" }); continue; }
+        if (spec.id !== "voiceOfUser" && spec.id !== "weibo" && !card.url) { skip("missing_post_url", { title: card.title, stage: "result_validation" }); continue; }
         seen.add(identityKey);
-        detailsViewedThisQuery += 1;
+        coverage.detailsAttempted += 1;
         reviewed += 1;
         syncProgress("reading");
         const resultsPage = page;
@@ -1247,6 +1592,7 @@ async function collectCommunityPlatform(context, task, spec, queries, agent, act
         let voiceOriginalUrl = page.url();
         let voiceOpened = false;
         let voiceFeedbackLink = "";
+        let voiceOpenDiagnostics = null;
         let weiboDetailPopup = null;
         let weiboSourceUrl = "";
         try {
@@ -1257,9 +1603,36 @@ async function collectCommunityPlatform(context, task, spec, queries, agent, act
             voiceOriginalUrl = opened.originalUrl;
             voiceOpened = opened.opened;
             voiceFeedbackLink = opened.feedbackUrl || "";
-            if (voiceOpened) openedDetails += 1;
+            voiceOpenDiagnostics = opened.diagnostics || null;
+            if (voiceOpened) {
+              openedDetails += 1;
+              coverage.detailsOpened += 1;
+              appendCollectionLog(activity, spec.id, {
+                type: "detail_identified",
+                query: currentQuery,
+                reason: "voice_detail_identified",
+                title: card.title,
+                url: voiceFeedbackLink,
+                stage: "open_detail",
+                detail: `已确认详情内容与结果卡片匹配；feedbackId 来源：${voiceOpenDiagnostics?.feedbackIdSource || "未知"}。`,
+                metadata: voiceOpenDiagnostics,
+              });
+            }
             syncProgress("reading");
-            if (!voiceOpened) { skip("detail_feedback_id_not_found"); continue; }
+            if (!voiceOpened) {
+              skip("detail_feedback_id_not_found", {
+                title: card.title,
+                url: voiceOpenDiagnostics?.finalUrl || voiceOriginalUrl,
+                stage: "open_detail",
+                detail: voiceOpenDiagnostics?.clickError
+                  ? `点击详情时发生错误：${String(voiceOpenDiagnostics.clickError).slice(0, 120)}`
+                  : voiceOpenDiagnostics?.detailVisible
+                    ? "详情内容已出现并与结果卡片匹配，但未能从详情 URL、详情链接或详情元素属性中提取 feedbackId。"
+                    : "点击后未检测到与结果卡片匹配的详情区域；请检查点击目标、页面变化和加载状态。",
+                metadata: voiceOpenDiagnostics,
+              });
+              continue;
+            }
           } else if (spec.id !== "weibo") {
             await page.goto(card.url, { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
             await page.waitForTimeout(600);
@@ -1279,6 +1652,7 @@ async function collectCommunityPlatform(context, task, spec, queries, agent, act
               weiboCard = openedWeibo.post;
               weiboCardIsBody = Boolean(openedWeibo.postIsBody);
               openedDetails += 1;
+              coverage.detailsOpened += 1;
               syncProgress("reading");
             }
           }
@@ -1291,39 +1665,66 @@ async function collectCommunityPlatform(context, task, spec, queries, agent, act
               const normalizeName = (value) => clean(value).normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
               const normalizeText = (value) => clean(value).normalize("NFKC").toLocaleLowerCase().replace(/https?:\/\/\S+/g, "").replace(/\b(?:转发|评论|赞|浏览)\s*\d*/g, "").replace(/[\s\p{P}\p{S}]+/gu, "");
               const target = normalizeText(args.identity);
-              if (target.length < 48) return [];
-              const targetPrefix = target.slice(0, Math.min(72, target.length));
+              // Short Weibo posts are common. Use 16 normalized characters as
+              // the minimum body signal, but require an exact author match for
+              // short-text matches unless a stable post ID matches.
+              if (target.length < 16) return [];
+              const targetPrefix = target.slice(0, Math.min(48, target.length));
+              const candidateStatusId = (() => {
+                try {
+                  const url = new URL(args.url);
+                  const path = url.pathname.split("/").filter(Boolean);
+                  return path.length >= 2 && /^\d{5,}$/.test(path[path.length - 2])
+                    ? path[path.length - 1]
+                    : path.length >= 2 && /^(?:status|detail)$/i.test(path[path.length - 2])
+                      ? path[path.length - 1]
+                      : "";
+                } catch { return ""; }
+              })();
               return nodes.map((node, index) => {
                 const body = clean(node.querySelector("[node-type='feed_list_content'], .txt, [class*='feed_list_content']")?.innerText || "");
                 const normalizedBody = normalizeText(body);
                 const author = clean(node.querySelector("a[namecard], .name, [class*='name']")?.textContent || "");
-                const bodyMatches = normalizedBody.includes(targetPrefix) || normalizedBody.startsWith(targetPrefix.slice(0, 48));
                 const expectedAuthor = normalizeName(args.author);
                 const liveAuthor = normalizeName(author);
-                const authorMatches = !expectedAuthor || !liveAuthor || expectedAuthor === liveAuthor;
-                return { index, bodyMatches, authorMatches, bodyLength: normalizedBody.length };
-              }).filter((item) => item.bodyMatches && item.authorMatches && item.bodyLength >= 48).map((item) => item.index);
-            }, { identity: expectedBody, author: String(card.author || "").trim() }).catch(() => []);
+                const authorMatches = Boolean(expectedAuthor && liveAuthor && expectedAuthor === liveAuthor);
+                const authorConflicts = Boolean(expectedAuthor && liveAuthor && expectedAuthor !== liveAuthor);
+                const liveStatusIds = [...node.querySelectorAll("a[href]")].map((anchor) => {
+                  try {
+                    const path = new URL(anchor.href).pathname.split("/").filter(Boolean);
+                    if (path.length >= 2 && /^\d{5,}$/.test(path[path.length - 2])) return path[path.length - 1];
+                    if (path.length >= 2 && /^(?:status|detail)$/i.test(path[path.length - 2])) return path[path.length - 1];
+                  } catch {}
+                  return "";
+                }).filter(Boolean);
+                const statusIdMatches = Boolean(candidateStatusId && liveStatusIds.includes(candidateStatusId));
+                const bodyMatches = normalizedBody.includes(targetPrefix);
+                const shortBody = target.length < 48;
+                const accepted = !authorConflicts && (statusIdMatches || (bodyMatches && (!shortBody || authorMatches)));
+                return { index, accepted, bodyMatches, authorMatches, statusIdMatches, bodyLength: normalizedBody.length };
+              }).filter((item) => item.accepted).map((item) => item.index);
+            }, { identity: expectedBody, author: String(card.author || "").trim(), url: card.sourceUrl || "" }).catch(() => []);
             // Result indices captured while scrolling become stale. Match the
             // actual post body (and author when available) in the live DOM and
             // require a unique match before pairing its text with a screenshot.
-            if (matchingIndexes.length !== 1) { skip(matchingIndexes.length ? "weibo_ambiguous_post_match" : "weibo_post_text_not_found"); continue; }
+            if (matchingIndexes.length !== 1) { skip(matchingIndexes.length ? "weibo_ambiguous_post_match" : "weibo_post_text_not_found", { title: card.title, url: card.sourceUrl, stage: "match_post_detail", detail: `正文、作者或帖子 ID 匹配数：${matchingIndexes.length}。`, metadata: { candidateUrl: card.sourceUrl || "", author: card.author || "", candidateTextLength: (card.identityText || "").length, minimumNormalizedBodyLength: 16 } }); continue; }
             openedDetails += 1;
+            coverage.detailsOpened += 1;
             syncProgress("reading");
             const matchedIndex = matchingIndexes[0];
             weiboCard = weiboCards.nth(matchedIndex);
             await weiboCard.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
           }
           const expectedFeedbackId = spec.id === "voiceOfUser" ? voiceFeedbackId(detailPage.url()) : "";
-          if (spec.id === "voiceOfUser" && !expectedFeedbackId && !voiceFeedbackId(voiceFeedbackLink)) { skip("feedback_id_missing_after_card_click"); continue; }
+          if (spec.id === "voiceOfUser" && !expectedFeedbackId && !voiceFeedbackId(voiceFeedbackLink)) { skip("feedback_id_missing_after_card_click", { title: card.title, url: detailPage.url(), stage: "validate_detail_identity", metadata: voiceOpenDiagnostics }); continue; }
           const voiceDetail = spec.id === "voiceOfUser"
             ? await waitForVoiceFeedbackDetail(detailPage, card.identityText || card.text, expectedFeedbackId || voiceFeedbackId(voiceFeedbackLink))
             : null;
-          if (spec.id === "voiceOfUser" && !voiceDetail) { skip("voice_detail_content_not_matched"); continue; }
+          if (spec.id === "voiceOfUser" && !voiceDetail) { skip("voice_detail_content_not_matched", { title: card.title, url: voiceFeedbackLink || detailPage.url(), stage: "validate_detail_content", metadata: voiceOpenDiagnostics }); continue; }
           let detail = spec.id === "weibo"
             ? await weiboCard.innerText({ timeout: 5000 }).catch(() => card.text)
             : spec.id === "voiceOfUser" ? voiceDetail.text : await detailPage.locator("body").innerText({ timeout: 5000 }).catch(() => "");
-          if (!detail.trim() || spec.loginPattern.test(detail) || detail.length < 80) { skip("detail_text_empty_or_login"); continue; }
+          if (!detail.trim() || spec.loginPattern.test(detail) || detail.length < 80) { skip("detail_text_empty_or_login", { title: card.title, url: detailPage.url(), stage: "validate_detail_content", detail: `详情文本长度 ${detail.trim().length}。`, metadata: { textLength: detail.trim().length, loginPatternMatched: spec.loginPattern.test(detail) } }); continue; }
           let rawComments = [];
           if (spec.id === "weibo") {
             // A Weibo post's detail is already the expanded feed card; there is
@@ -1334,26 +1735,27 @@ async function collectCommunityPlatform(context, task, spec, queries, agent, act
               rawComments = await readWeiboComments(detailPage, weiboCard);
             }
           }
-          const postTags = extractHashtags(card.title, card.text, detail);
-          if (!matchesResearchTerms(task.project, query, card.title, card.text, detail, postTags)) { skip("research_keyword_not_found"); continue; }
+          // The platform result list is already filtered by the selected query.
+          // Requiring the entire phrase again in the post body drops relevant
+          // posts whose wording differs from their search phrase.
           const date = normalizedPostDate(detail);
-          if (!isWithinFeedbackDateRange(detail, task.project)) { skip("post_date_missing_or_out_of_range"); continue; }
+          if (!isWithinFeedbackDateRange(detail, task.project)) { skip("post_date_missing_or_out_of_range", { title: card.title, url: spec.id === "voiceOfUser" ? voiceFeedbackLink : card.sourceUrl, stage: "date_filter", detail: `解析日期：${date || "未识别"}；范围：${task.project?.feedbackStartDate || "默认起始日期"} 至 ${task.project?.feedbackEndDate || "今天"}。` }); continue; }
           const screenshot = spec.id === "weibo"
             ? await weiboCard.screenshot({ type: "png" }).catch(() => null)
             : spec.id === "voiceOfUser" ? voiceDetail.screenshot : await detailPage.screenshot({ type: "png" }).catch(() => null);
-          if (!screenshot) { skip("screenshot_failed"); continue; }
+          if (!screenshot) { skip("screenshot_failed", { title: card.title, stage: "capture_screenshot" }); continue; }
           if (spec.id === "voiceOfUser") {
             rawComments = await detailPage.locator("[class*='voice'], [class*='reply'], [class*='feedback'], [class*='comment']").allTextContents().then((items) => items.map((item) => item.replace(/\s+/g, " ").trim()).filter((item) => item.length >= 8 && item.length <= 500).slice(0, 8)).catch(() => []);
           } else if (spec.id !== "weibo") {
             rawComments = await detailPage.locator("[class*='comment'], [class*='reply'], [class*='feedback']").allTextContents().then((items) => items.map((item) => item.replace(/\s+/g, " ").trim()).filter((item) => item.length >= 12 && item.length <= 320).slice(0, 8)).catch(() => []);
           }
-          const distilled = await agent.summarizeCandidate({ title: card.title, text: detail, comments: rawComments, query, projectContext: `项目目标：${projectWords(task.project).join("、")}` }).catch(() => null);
+          const distilled = await agent.summarizeCandidate({ title: spec.id === "weibo" ? "无独立标题（以微博正文为准）" : card.title, text: detail, comments: rawComments, query, projectContext: `项目目标：${projectWords(task.project).join("、")}` }).catch(() => null);
           const candidateUrl = spec.id === "voiceOfUser" && voiceFeedbackId(voiceFeedbackLink) && !voiceFeedbackId(detailPage.url())
             ? voiceFeedbackLink : detailPage.url();
           const voiceDetailUrl = spec.id === "voiceOfUser"
             ? voiceFeedbackId(candidateUrl) ? canonicalVoiceDetailUrl(candidateUrl) : ""
             : "";
-          if (spec.id === "voiceOfUser" && (!voiceDetailUrl || !voiceFeedbackId(candidateUrl))) { skip("voice_permalink_missing"); continue; }
+          if (spec.id === "voiceOfUser" && (!voiceDetailUrl || !voiceFeedbackId(candidateUrl))) { skip("voice_permalink_missing", { title: card.title, stage: "validate_source_link" }); continue; }
           // Keep only the post's own visible text as its identity. The detail
           // page body can contain surrounding results/navigation, and AI
           // summaries are intentionally not stable enough for deduplication.
@@ -1371,15 +1773,17 @@ async function collectCommunityPlatform(context, task, spec, queries, agent, act
               : card.sourceUrl || candidateUrl || card.url;
           const savedResponse = await api(`/api/research/tasks/${task.id}/candidates`, { method: "POST", body: JSON.stringify({ candidates: [{
             id: `candidate-${spec.id}-${createHash("sha1").update(dedupeKey || identityKey).digest("hex").slice(0, 12)}`,
-            source: spec.source, title: String(distilled?.insightTitle || card.title).slice(0, 120), url: sourceUrl, author: card.author || spec.name, publishedAt: date || null,
-            capturedAt: new Date().toISOString(), excerpt: String(distilled?.summary || detail.replace(/\s+/g, " ").slice(0, 500)), screenshotBase64: screenshot.toString("base64"),
+            source: spec.source, title: spec.id === "weibo" ? "" : String(distilled?.insightTitle || card.title).slice(0, 120), url: sourceUrl, author: card.author || spec.name, publishedAt: date || null,
+            capturedAt: new Date().toISOString(), excerpt: String(spec.id === "weibo" ? identityText.slice(0, 500) : distilled?.summary || detail.replace(/\s+/g, " ").slice(0, 500)), screenshotBase64: screenshot.toString("base64"),
             mediaType: "community_post", keywords: [query, spec.name], valuableComments: Array.isArray(distilled?.comments) ? distilled.comments.slice(0, 8) : rawComments, relevance: relevance(detail, task.project, query),
             identityText, dedupeKey, screenshotHash,
           }] }) });
           const saveResult = await savedResponse.json().catch(() => ({}));
           const actuallySaved = Number(saveResult.saved || 0);
           eligible += 1;
-          if (!actuallySaved) skip(savedResponse.ok ? "duplicate_in_database" : "save_request_rejected");
+          coverage.saved += actuallySaved;
+          if (!actuallySaved) skip(savedResponse.ok ? "duplicate_in_database" : "save_request_rejected", { title: card.title, url: sourceUrl, stage: "save_candidate", detail: savedResponse.ok ? "保存接口判定为重复记录。" : `保存接口返回 HTTP ${savedResponse.status}。` });
+          else appendCollectionLog(activity, spec.id, { type: "saved", query, reason: "candidate_saved", title: card.title, url: sourceUrl, stage: "save_candidate" });
           saved += actuallySaved;
           syncProgress("reading");
           activity.detailCount = Number(activity.detailCount || 0) + actuallySaved;
@@ -1400,6 +1804,7 @@ async function collectCommunityPlatform(context, task, spec, queries, agent, act
     await updateTask(task.id, "running", activity);
     return saved;
   } catch (error) {
+    appendCollectionLog(activity, spec.id, { type: "error", query: currentQuery || undefined, reason: String(error?.message || error), stage: "platform_collection" });
     if (error instanceof LoginRequiredError) holdForLogin = true;
     throw error;
   } finally {
@@ -1412,6 +1817,7 @@ async function collectVisibleCards(page) {
   return page.locator("a[href]").evaluateAll((anchors) => {
     const pattern = /xiaohongshu\.com\/(?:explore|discovery\/item|search_result)\/[0-9a-z]+/i;
     const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const looksLikeDate = (value) => /(?:20\d{2}\s*[-./年]\s*\d{1,2}|^\s*\d{1,2}\s*[-./月]\s*\d{1,2}\s*日?(?:\s+\d{1,2}:\d{2})?\s*$|今天|今日|昨天|昨日|前天|前日|刚刚|刚才|\d+\s*(?:秒|分钟|分|小时|天|日|周|个月|个?年)前|^\s*\d{1,2}:\d{2}\s*$)/.test(String(value || "").normalize("NFKC").trim());
     const found = new Map();
     for (const anchor of anchors) {
       if (!pattern.test(anchor.href)) continue;
@@ -1421,6 +1827,28 @@ async function collectVisibleCards(page) {
       if (rect.bottom <= 0 || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth) continue;
       const text = clean(card.innerText || anchor.innerText || card.querySelector("img")?.alt);
       if (!text) continue;
+      const dateCandidates = [];
+      const dateNodes = [...card.querySelectorAll("time, [class*='time'], [class*='date'], [aria-label], [title]")];
+      for (const node of dateNodes) {
+        const label = `${node.className || ""} ${node.getAttribute("aria-label") || ""}`.toLowerCase();
+        const values = [node.getAttribute("datetime"), node.getAttribute("title"), node.getAttribute("aria-label"), node.innerText];
+        for (const candidate of values) {
+          const value = clean(candidate);
+          if (!value || value.length > 48 || !looksLikeDate(value)) continue;
+          const semantic = /time|date|publish|发布|时间/.test(label) || node.tagName.toLowerCase() === "time";
+          dateCandidates.push({ value, source: semantic ? "result_card_time_element" : "result_card_date_attribute", score: semantic ? 2 : 1 });
+        }
+      }
+      if (!dateCandidates.length) {
+        const lines = String(card.innerText || "").split(/\n+/).map(clean).filter(Boolean);
+        // Titles and post copy can mention dates. Prefer short standalone lines
+        // (the author/date rows in Xiaohongshu result cards) over arbitrary text.
+        for (const line of lines.slice(1)) {
+          if (line.length <= 24 && looksLikeDate(line)) dateCandidates.push({ value: line, source: "result_card_standalone_line", score: 1 });
+        }
+      }
+      dateCandidates.sort((a, b) => b.score - a.score || a.value.length - b.value.length);
+      const dateEvidence = dateCandidates[0] || { value: "", source: "not_found" };
       const id = anchor.href.match(/\/(?:explore|discovery\/item|search_result)\/([0-9a-z]+)/i)?.[1];
       if (!id || found.has(id)) continue;
       found.set(id, {
@@ -1428,6 +1856,8 @@ async function collectVisibleCards(page) {
         url: anchor.href,
         title: clean(anchor.querySelector("img")?.alt || text.split("\n")[0] || text).slice(0, 160),
         cardText: text.slice(0, 1000),
+        publishedAtText: dateEvidence.value,
+        publishedAtSource: dateEvidence.source,
       });
     }
     return [...found.values()];
@@ -1520,17 +1950,39 @@ async function searchCandidates(page, query, agent, onVisibleCards = null) {
   const rightPanelEvidence = await collectDynamicRightPanel(page).catch(() => ({ recommendations: [], text: "", screenshots: [] }));
 
   const collected = new Map();
-  for (let scroll = 0; scroll <= 10; scroll += 1) {
+  const scrollDiagnostics = [];
+  let resultCardSightings = 0;
+  let scrollSteps = 0;
+  let noNewResultRounds = 0;
+  let stopReason = "达到页面滚动安全上限";
+  const maxScrollSteps = 8;
+  for (let scroll = 0; scroll <= maxScrollSteps; scroll += 1) {
+    const previousCount = collected.size;
     const visibleCards = await collectVisibleCards(page);
+    resultCardSightings += visibleCards.length;
     for (const card of visibleCards) collected.set(card.id, card);
     const stop = onVisibleCards ? await onVisibleCards(visibleCards, url) : false;
-    if (stop) break;
-    if ((!onVisibleCards && collected.size >= maxCandidates * 3) || scroll === 10) break;
+    if (stop) { stopReason = "达到候选处理停止条件"; break; }
+    noNewResultRounds = collected.size === previousCount ? noNewResultRounds + 1 : 0;
+    scrollDiagnostics.push({ step: scroll, visibleCards: visibleCards.length, newUniqueCards: collected.size - previousCount, uniqueCards: collected.size, noNewResultRounds });
+    if (!collected.size && scroll >= 2) {
+      const pageText = await page.locator("body").innerText({ timeout: 1500 }).catch(() => "");
+      if (/暂无结果|没有找到|未找到相关/.test(pageText)) {
+        stopReason = "平台显示没有搜索结果";
+        break;
+      }
+    }
+    if (noNewResultRounds >= 3) {
+      stopReason = "连续3轮滚动未发现新结果";
+      break;
+    }
+    if (scroll === maxScrollSteps) break;
     await page.mouse.wheel(0, 900);
     await page.waitForTimeout(650);
     await pageGuard(page);
+    scrollSteps += 1;
   }
-  return { url, cards: [...collected.values()], ...rightPanelEvidence };
+  return { url, cards: [...collected.values()], scrollSteps, stopReason, resultCardSightings, scrollDiagnostics, ...rightPanelEvidence };
 }
 
 async function detailRoot(page) {
@@ -1659,7 +2111,20 @@ async function openCandidate(page, card, project, query, agent) {
   const likes = metric((text.match(/([\d.万]+)\s*赞/) || [])[1]);
   const comments = metric((text.match(/([\d.万]+)\s*(?:评论|评)/) || [])[1]);
   const collects = metric((text.match(/([\d.万]+)\s*收藏/) || [])[1]);
-  const date = normalizedPostDate(text);
+  // Prefer the timestamp visible on the search result card. Detail text often
+  // contains unrelated dates from comments, screenshots, or the post body.
+  let dateEvidence = postDateEvidence(card.publishedAtText, card.publishedAtSource || "search_result_card");
+  if (!dateEvidence.parsed) {
+    const detailDate = await root.locator("time, [class*='publish-time'], [class*='publishTime'], [class*='date'], [class*='time']")
+      .evaluateAll((nodes) => nodes.map((node) => ({
+        text: String(node.getAttribute("datetime") || node.getAttribute("title") || node.getAttribute("aria-label") || node.innerText || "").replace(/\s+/g, " ").trim(),
+        source: `detail_${String(node.className || node.tagName || "time").slice(0, 60)}`,
+      })).filter((item) => item.text && item.text.length <= 48).slice(0, 12))
+      .catch(() => []);
+    dateEvidence = detailDate.map((item) => postDateEvidence(item.text, item.source)).find((item) => item.parsed)
+      || postDateEvidence("", "detail_timestamp_not_found");
+  }
+  const date = dateEvidence.parsed;
 
   await page.keyboard.press("Escape");
   await page.waitForTimeout(450);
@@ -1681,6 +2146,10 @@ async function openCandidate(page, card, project, query, agent) {
     url: normalizePostUrl(detailUrl.includes(card.id) ? detailUrl : card.url),
     author: author.trim() || null,
     publishedAt: date || null,
+    publishedAtText: dateEvidence.raw || null,
+    publishedAtSource: dateEvidence.source,
+    feedbackGateText: text,
+    feedbackGateComments: rawComments,
     capturedAt: new Date().toISOString(),
     excerpt: String(distilled?.summary || text.slice(0, 500)),
     screenshotBase64: screenshot.toString("base64"),
@@ -1825,10 +2294,29 @@ async function collectVisualPlatform(context, task, platform, queries, agent, ac
           currentTitle: card.title,
         };
         await updateTask(task.id, "running", activity);
-        await page.goto(card.url, { waitUntil: "domcontentloaded", timeout: 20000 });
+        try {
+          await page.goto(card.url, { waitUntil: "domcontentloaded", timeout: 20000 });
+        } catch (error) {
+          const reason = /timeout/i.test(String(error?.message || error))
+            ? "visual_detail_navigation_timeout"
+            : "visual_detail_navigation_failed";
+          console.warn(`${platform}单条视觉详情页打开失败，跳过并继续：${card.url}；${error.message}`);
+          appendCollectionLog(activity, platform, {
+            type: "skipped", query, reason, title: card.title, url: card.url,
+            stage: "detail_navigation", detail: String(error?.message || error).slice(0, 500),
+          });
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
+          await page.waitForTimeout(platform === "pinterest" ? 900 : 600);
+          await updateTask(task.id, "running", activity).catch(() => {});
+          continue;
+        }
         const detailPath = new URL(page.url()).pathname;
         const validDetail = detailPath.includes(visualPlatformSpecs[platform].detailPath);
         if (!validDetail) {
+          appendCollectionLog(activity, platform, {
+            type: "skipped", query, reason: "visual_detail_url_not_confirmed",
+            title: card.title, url: card.url, stage: "detail_navigation", landedUrl: page.url(),
+          });
           await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
           continue;
         }
@@ -1840,6 +2328,10 @@ async function collectVisualPlatform(context, task, platform, queries, agent, ac
         }
         if (!detailReady) {
           console.warn(`${platform}详情页未加载出可用内容，跳过：${card.url}`);
+          appendCollectionLog(activity, platform, {
+            type: "skipped", query, reason: "visual_detail_content_unavailable",
+            title: card.title, url: card.url, stage: "detail_content", detail: "等待并刷新后仍未识别到可用详情内容。",
+          });
           await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
           await page.waitForTimeout(1000);
           continue;
@@ -1918,6 +2410,22 @@ async function collectVisualPlatform(context, task, platform, queries, agent, ac
       browsed, reviewed, eligible: evaluated.length, saved: 0,
     };
     await updateTask(task.id, "running", activity);
+    return evaluated;
+  } catch (error) {
+    const message = String(error?.message || error);
+    console.warn(`${platform}视觉研究异常结束，保留已评估通过的 ${evaluated.length} 条：${message}`);
+    appendCollectionLog(activity, platform, {
+      type: "error", reason: "visual_platform_collection_interrupted",
+      stage: "platform_collection", detail: message.slice(0, 1000), preservedEligible: evaluated.length,
+    });
+    activity.sourceProgress[platform] = {
+      ...activity.sourceProgress[platform],
+      phase: evaluated.length ? "partial" : "failed", error: message,
+      browsed, reviewed, eligible: evaluated.length, saved: 0,
+    };
+    await updateTask(task.id, "running", activity).catch((saveError) => {
+      console.warn(`${platform}部分采集状态写入失败：${saveError.message}`);
+    });
     return evaluated;
   } finally {
     await page.close().catch(() => {});
@@ -2095,9 +2603,11 @@ async function collectXiaohongshuVisual(page, task, agent, activity) {
           if (imageHashes.has(imageHash)) continue;
           const analysis = await agent.analyzeVisualSample({ screenshot, platform: "xiaohongshu", title: candidate.title, query }).catch(() => null);
           imageHashes.add(imageHash);
+          const sourceCandidateId = String(candidate.id || crypto.randomUUID()).replace(`${task.id}:`, "");
+          const visualCandidateId = `${task.id}:visual-${sourceCandidateId}`;
           const visualCandidate = {
             ...candidate,
-            id: `visual-${candidate.id}`,
+            id: visualCandidateId,
             source: "xiaohongshu_visual",
             excerpt: String(analysis?.reason || candidate.excerpt || "").slice(0, 500),
             keywords: [competitor.name, ...(Array.isArray(analysis?.visualFeatures) ? analysis.visualFeatures.slice(0, 6) : [])],
@@ -2133,12 +2643,34 @@ async function collectXiaohongshuVisual(page, task, agent, activity) {
 async function collectXiaohongshu(page, task, queries, agent, activity) {
   const seen = new Set();
   let saved = 0;
+  let browsed = 0;
+  let reviewed = 0;
+  let opened = 0;
+  let currentQuery = "";
+  const skipped = {};
+  const skip = (reason, context = {}) => {
+    skipped[reason] = Number(skipped[reason] || 0) + 1;
+    appendCollectionLog(activity, "xiaohongshu", {
+      type: "skipped", query: currentQuery, reason,
+      title: String(context.title || "").slice(0, 160) || undefined,
+      url: String(context.url || "").slice(0, 500) || undefined,
+      detail: String(context.detail || "").slice(0, 240) || undefined,
+      stage: context.stage || "candidate_validation",
+      metadata: context.metadata && typeof context.metadata === "object" ? context.metadata : undefined,
+    });
+  };
+  activity.sourceProgress.xiaohongshu = {
+    ...activity.sourceProgress.xiaohongshu,
+    browsed: 0, reviewed: 0, opened: 0, eligible: 0, saved: 0, skipped: {}, queryCoverage: [],
+  };
   for (let index = 0; index < queries.length; index += 1) {
     const query = queries[index];
+    currentQuery = query;
     activity.sourceProgress.xiaohongshu = {
+      ...activity.sourceProgress.xiaohongshu,
       phase: "searching", progress: Math.round((index / queries.length) * 100),
       queryIndex: index + 1, queryTotal: queries.length,
-      browsed: activity.browsedCount, saved,
+      browsed, reviewed, opened, eligible: saved, saved, skipped: { ...skipped },
     };
     Object.assign(activity, {
       phase: "searching", queryIndex: index + 1, currentQuery: query,
@@ -2146,44 +2678,156 @@ async function collectXiaohongshu(page, task, queries, agent, activity) {
     });
     await updateTask(task.id, "running", activity);
     const processedThisQuery = new Set();
-    let detailsViewedThisQuery = 0;
+    const coverage = { query, sort: "平台默认排序", resultsBrowsed: 0, resultCardSightings: 0, detailsAttempted: 0, detailsOpened: 0, saved: 0, scrollSteps: 0, stopReason: "" };
     const result = await searchCandidates(page, query, agent, async (visibleCards) => {
+      coverage.resultsBrowsed = Math.max(coverage.resultsBrowsed, visibleCards.length);
       for (const card of visibleCards) {
-        if (detailsViewedThisQuery >= 10) break;
         const key = identity(card.url);
-        if (processedThisQuery.has(key) || seen.has(key)) continue;
+        if (processedThisQuery.has(key)) continue;
+        if (seen.has(key)) { processedThisQuery.add(key); skip("duplicate_in_run", { title: card.title, url: card.url, stage: "dedupe", detail: "该帖子已在本轮其他关键词下处理。" }); continue; }
         processedThisQuery.add(key);
+        const cardDate = postDateEvidence(card.publishedAtText, card.publishedAtSource || "search_result_card");
+        const cardDateInRange = isDateInProjectRange(cardDate.raw, task.project);
+        const dateLogContext = {
+          title: card.title,
+          url: card.url,
+          stage: "pre_open_date_filter",
+          detail: cardDateInRange === false
+            ? `搜索结果卡片日期 ${cardDate.raw} 解析为 ${cardDate.parsed}，超出项目日期范围。`
+            : cardDateInRange === true
+              ? `搜索结果卡片日期 ${cardDate.raw} 解析为 ${cardDate.parsed}，在项目日期范围内。`
+              : `搜索结果卡片日期无法识别（原文：${cardDate.raw || "空"}）；为避免误删，将打开详情页核实。`,
+          metadata: {
+            publishedAtRaw: cardDate.raw || null,
+            publishedAtSource: cardDate.source,
+            parsedDate: cardDate.parsed || null,
+            feedbackStartDate: task.project?.feedbackStartDate || null,
+            feedbackEndDate: task.project?.feedbackEndDate || null,
+          },
+        };
+        if (cardDateInRange === false) {
+          skip("post_date_out_of_range_before_open", dateLogContext);
+          continue;
+        }
+        appendCollectionLog(activity, "xiaohongshu", {
+          type: "date_check",
+          query: currentQuery,
+          reason: cardDateInRange === true ? "result_card_date_in_range" : "result_card_date_unrecognized_open_for_verification",
+          ...dateLogContext,
+        });
         seen.add(key);
-        detailsViewedThisQuery += 1;
+        reviewed += 1;
+        coverage.detailsAttempted += 1;
         activity.sourceProgress.xiaohongshu = {
           ...activity.sourceProgress.xiaohongshu,
           phase: "reading",
           progress: Math.min(94, Math.round(((index + 0.65) / queries.length) * 100)),
           currentTitle: card.title,
+          reviewed,
         };
         activity.matchedCount = seen.size;
         await updateTask(task.id, "running", activity);
         try {
           const candidate = await openCandidate(page, card, task.project, query, agent);
-          activity.sourceProgress.xiaohongshu.reviewed = Number(activity.sourceProgress.xiaohongshu.reviewed || 0) + 1;
+          opened += 1;
+          coverage.detailsOpened += 1;
+          activity.sourceProgress.xiaohongshu.opened = opened;
           await updateTask(task.id, "running", activity);
-          if (!matchesResearchTerms(task.project, query, candidate.title, candidate.excerpt, card.cardText, candidate.matchText, candidate.matchTags)) continue;
-          if (!isWithinFeedbackDateRange(candidate.publishedAt, task.project)) continue;
+          // Search results already came from the user's selected keyword. Do not
+          // reject a relevant post just because its body omits the full query phrase.
+          const resolvedDate = candidate.publishedAtText || cardDate.raw;
+          const resolvedDateSource = candidate.publishedAtSource || cardDate.source;
+          const resolvedDateCheck = isDateInProjectRange(resolvedDate, task.project);
+          const resolvedEvidence = postDateEvidence(resolvedDate, resolvedDateSource);
+          const resolvedDateMetadata = {
+            publishedAtRaw: resolvedEvidence.raw || null,
+            publishedAtSource: resolvedEvidence.source,
+            parsedDate: resolvedEvidence.parsed || null,
+            feedbackStartDate: task.project?.feedbackStartDate || null,
+            feedbackEndDate: task.project?.feedbackEndDate || null,
+          };
+          if (resolvedDateCheck === false) {
+            skip("post_date_out_of_range_after_detail", {
+              title: candidate.title || card.title,
+              url: candidate.url || card.url,
+              stage: "detail_date_verification",
+              detail: `详情核实日期 ${resolvedEvidence.raw} 解析为 ${resolvedEvidence.parsed}，超出项目日期范围。`,
+              metadata: resolvedDateMetadata,
+            });
+            continue;
+          }
+          appendCollectionLog(activity, "xiaohongshu", {
+            type: "date_check", query: currentQuery,
+            reason: resolvedDateCheck === true ? "detail_date_in_range" : "detail_date_unrecognized_kept",
+            title: candidate.title || card.title,
+            url: candidate.url || card.url,
+            stage: "detail_date_verification",
+            detail: resolvedDateCheck === true
+              ? `确认日期 ${resolvedEvidence.raw} → ${resolvedEvidence.parsed} 在项目范围内。`
+              : "结果卡片和详情页均未识别到可靠发布日期；按约定保留，并记录供追溯。",
+            metadata: resolvedDateMetadata,
+          });
+          const feedbackGate = classifyPureMutualAidPost(
+            card.title || "",
+            candidate.feedbackGateText || candidate.excerpt || "",
+            candidate.feedbackGateComments || candidate.valuableComments || [],
+          );
+          if (feedbackGate.isPureMutualAid) {
+            skip("pure_mutual_aid_no_product_feedback", {
+              title: candidate.title || card.title,
+              url: candidate.url || card.url,
+              stage: "feedback_relevance_gate",
+              detail: `检测到纯互助内容，未发现产品体验反馈；依据：${feedbackGate.aidEvidence.join("；")}`,
+              metadata: {
+                aidEvidence: feedbackGate.aidEvidence,
+                feedbackEvidence: feedbackGate.feedbackEvidence,
+                classification: "pure_mutual_aid",
+                policy: "仅在存在明确互助信号且未发现产品体验信号时过滤；不确定内容保留。",
+              },
+            });
+            continue;
+          }
+          appendCollectionLog(activity, "xiaohongshu", {
+            type: "feedback_gate",
+            query: currentQuery,
+            reason: feedbackGate.feedbackEvidence.length ? "product_feedback_signal_kept" : "uncertain_or_no_pure_aid_signal_kept",
+            title: candidate.title || card.title,
+            url: candidate.url || card.url,
+            stage: "feedback_relevance_gate",
+            detail: feedbackGate.feedbackEvidence.length
+              ? `发现体验反馈线索，保留：${feedbackGate.feedbackEvidence.join("；")}`
+              : "未能确认这是纯互助帖子，按保守规则保留。",
+            metadata: {
+              aidEvidence: feedbackGate.aidEvidence,
+              feedbackEvidence: feedbackGate.feedbackEvidence,
+              classification: feedbackGate.feedbackEvidence.length ? "feedback_signal" : "uncertain_kept",
+              policy: "仅在存在明确互助信号且未发现产品体验信号时过滤；不确定内容保留。",
+            },
+          });
+          delete candidate.feedbackGateText;
+          delete candidate.feedbackGateComments;
           delete candidate.matchText;
           delete candidate.matchTags;
           if (task.project?.designType === "brand") candidate.source = "jd_feedback";
-          await api(`/api/research/tasks/${task.id}/candidates`, {
+          const response = await api(`/api/research/tasks/${task.id}/candidates`, {
             method: "POST",
             body: JSON.stringify({ candidates: [candidate] }),
           });
-          saved += 1;
+          const result = await response.json().catch(() => ({}));
+          if (Number(result.saved || 0) > 0) saved += Number(result.saved);
+          coverage.saved += Number(result.saved || 0);
+          if (Number(result.duplicates || 0) > 0) skip("duplicate_in_database", { title: candidate.title, url: candidate.url, stage: "save_candidate", detail: "保存接口判定为已有记录。", metadata: { duplicates: Number(result.duplicates || 0), saved: Number(result.saved || 0) } });
           activity.detailCount = saved;
           activity.agentRecoveryCalls = agent.recoveryCalls;
           activity.agentSummaryCalls = agent.summaryCalls;
           activity.sourceProgress.xiaohongshu.saved = saved;
+          activity.sourceProgress.xiaohongshu.eligible = saved;
+          activity.sourceProgress.xiaohongshu.skipped = { ...skipped };
           await updateTask(task.id, "running", activity);
         } catch (error) {
           if (error instanceof LoginRequiredError || error instanceof RateLimitedError) throw error;
+          skip("detail_open_failed", { title: card.title, url: card.url, stage: "open_detail", detail: String(error?.message || error), metadata: { pageUrl: page.url(), query } });
+          activity.sourceProgress.xiaohongshu.skipped = { ...skipped };
           console.warn(`[${task.id}] 跳过候选 ${card.title}: ${error.message}`);
           activity.lastError = error.message;
           await page.keyboard.press("Escape").catch(() => {});
@@ -2194,14 +2838,35 @@ async function collectXiaohongshu(page, task, queries, agent, activity) {
         }
         await sleep(actionDelayMs);
       }
-      return detailsViewedThisQuery >= 10;
+      return false;
+    });
+    coverage.resultsBrowsed = result.cards.length;
+    coverage.resultCardSightings = result.resultCardSightings;
+    coverage.scrollSteps = result.scrollSteps;
+    coverage.stopReason = result.stopReason;
+    coverage.scrollDiagnostics = result.scrollDiagnostics;
+    browsed += result.cards.length;
+    activity.sourceProgress.xiaohongshu = {
+      ...activity.sourceProgress.xiaohongshu,
+      queryCoverage: [...(activity.sourceProgress.xiaohongshu.queryCoverage || []), coverage],
+    };
+    appendCollectionLog(activity, "xiaohongshu", {
+      type: "search", query, reason: "search_results_loaded", stage: "search_results",
+      detail: `本关键词看到 ${result.resultCardSightings} 次卡片，去重后 ${result.cards.length} 条；滚动 ${result.scrollSteps} 次，停止原因：${result.stopReason}。`,
+      url: result.url,
+      metadata: { resultCardSightings: result.resultCardSightings, uniqueCards: result.cards.length, scrollSteps: result.scrollSteps, stopReason: result.stopReason, scrollDiagnostics: result.scrollDiagnostics },
     });
     activity.browsedCount += result.cards.length;
-    activity.sourceProgress.xiaohongshu.browsed = activity.browsedCount;
+    activity.sourceProgress.xiaohongshu.browsed = browsed;
+    activity.sourceProgress.xiaohongshu.reviewed = reviewed;
+    activity.sourceProgress.xiaohongshu.opened = opened;
+    activity.sourceProgress.xiaohongshu.saved = saved;
+    activity.sourceProgress.xiaohongshu.eligible = saved;
+    activity.sourceProgress.xiaohongshu.skipped = { ...skipped };
     await updateTask(task.id, "running", activity);
   }
   activity.sourceProgress.xiaohongshu = {
-    ...activity.sourceProgress.xiaohongshu, phase: "completed", progress: 100, saved,
+    ...activity.sourceProgress.xiaohongshu, phase: "completed", progress: 100, browsed, reviewed, opened, eligible: saved, saved,
   };
   await updateTask(task.id, "running", activity);
   return saved;
@@ -2305,8 +2970,15 @@ async function processTask(context, task) {
   const pages = context.pages();
   const page = pages.find((item) => item.url().includes("xiaohongshu.com")) || await context.newPage();
   const queries = buildQueries(task.project);
-  const confirmedDirections = task.activity?.visualDirectionsConfirmed && Array.isArray(task.activity?.visualDirections)
-    ? task.activity.visualDirections : null;
+  const projectDirections = task.project?.visualResearchPath === "existing" && Array.isArray(task.project?.visualDirections)
+    ? task.project.visualDirections.map((item) => typeof item === "string" ? { label: item } : item)
+      .map((item) => ({ label: String(item?.label || "").trim(), sourceNames: [], rationale: String(item?.rationale || "用户提供的已有视觉方向"), sampleIds: [] }))
+      .filter((item) => item.label)
+    : [];
+  const confirmedDirections = projectDirections.length
+    ? projectDirections
+    : task.activity?.visualDirectionsConfirmed && Array.isArray(task.activity?.visualDirections)
+      ? task.activity.visualDirections : null;
   const confirmedCompetitors = task.activity?.visualCompetitorsConfirmed && Array.isArray(task.activity?.visualCompetitors)
     ? task.activity.visualCompetitors : null;
   const visualOnly = task.project?.researchMode === "visual";
@@ -2328,6 +3000,17 @@ async function processTask(context, task) {
         },
   };
   if (!visualOnly) activity.selectedFeedbackPlatforms = [...selectedFeedbackPlatforms];
+  if (projectDirections.length) Object.assign(activity, {
+    visualOnly: true,
+    visualResearchPath: "existing",
+    visualDirections: projectDirections,
+    visualDirectionsConfirmed: true,
+    phase: "generating_visual_terms",
+    message: "正在为已有视觉方向准备 Behance 与 Pinterest 搜索词",
+    sourceProgress: Object.fromEntries(visualPlatformsFor(task.project).map((platform) => [platform, {
+      phase: "queued", progress: 0, queryIndex: 0, queryTotal: 0, browsed: 0, reviewed: 0, opened: 0, saved: 0,
+    }])),
+  });
 
   try {
     if (!confirmedDirections) {
@@ -2356,6 +3039,7 @@ async function processTask(context, task) {
             if (error instanceof LoginRequiredError) {
               activity.loginRequiredPlatforms = [...new Set([...(activity.loginRequiredPlatforms || []), label])];
             }
+            appendCollectionLog(activity, platformId, { type: "error", reason: message, stage: "platform_collection" });
             activity.sourceProgress[platformId] = {
               ...activity.sourceProgress[platformId], phase: "failed", error: message,
             };

@@ -7,6 +7,7 @@ import {
   ResearchTask,
 } from "../lib/localResearchStore";
 import PlatformLogo from "./PlatformLogo";
+import NightingaleIcon from "./NightingaleIcon";
 import { normalizeDesignField, researchProfiles } from "../lib/researchProfiles";
 
 type TaskState = "queued" | "running" | "awaiting_competitor_confirmation" | "awaiting_visual_confirmation" | "completed" | "failed" | "needs_login" | "local";
@@ -45,6 +46,16 @@ type ResearchActivity = {
     eligible?: number;
     saved?: number;
     skipped?: Record<string, number>;
+    queryCoverage?: Array<{
+      query: string;
+      sort: string;
+      resultsBrowsed: number;
+      detailsAttempted: number;
+      detailsOpened: number;
+      saved: number;
+      scrollSteps: number;
+      stopReason: string;
+    }>;
     currentTitle?: string;
     error?: string;
   }>;
@@ -67,35 +78,12 @@ const referenceSourceCopy = [
   { id: "pinterest", platform: "pinterest" as const, name: "Pinterest", detail: "逐条进入 Pin 详情，采集视觉参考" },
 ];
 
-const skipReasonLabels: Record<string, string> = {
-  duplicate_in_run: "本轮重复结果",
-  missing_post_url: "结果缺少帖子链接",
-  detail_feedback_id_not_found: "未能打开用户之声详情",
-  feedback_id_missing_after_card_click: "详情地址没有 feedbackId",
-  voice_detail_content_not_matched: "详情内容与结果卡片不匹配",
-  detail_text_empty_or_login: "详情为空或需要登录",
-  weibo_ambiguous_post_match: "微博正文匹配不唯一",
-  weibo_post_text_not_found: "未找到对应微博正文",
-  joy_trip_keyword_not_found: "内容没有项目关键词",
-  post_date_missing_or_out_of_range: "日期缺失或超出范围",
-  screenshot_failed: "截图失败",
-  voice_permalink_missing: "用户之声详情链接无效",
-  duplicate_in_database: "与已有案例重复",
-  save_request_rejected: "案例保存失败",
-};
-
-const referenceFlow = [
-  { phase: "generating_visual_terms", label: "生成检索词" },
-  { phase: "visual_searching", label: "采集详情页" },
-  { phase: "visual_analysis", label: "分析与筛选" },
-  { phase: "completed", label: "保存参考图" },
-];
-
-export default function ResearchRunner({ onComplete, candidateSelectionCount = 0, onConfirmDirections, onStatusChange }: {
+export default function ResearchRunner({ onComplete, candidateSelectionCount = 0, onConfirmDirections, onStatusChange, onVisualDirectionsConfirmed }: {
   onComplete: () => void;
   candidateSelectionCount?: number;
   onConfirmDirections?: () => Promise<void> | void;
   onStatusChange?: (status: TaskState) => void;
+  onVisualDirectionsConfirmed?: (directions: string[]) => void;
 }) {
   const [taskId, setTaskId] = useState("");
   const [status, setStatus] = useState<TaskState>("queued");
@@ -119,6 +107,8 @@ export default function ResearchRunner({ onComplete, candidateSelectionCount = 0
   const [activeCompetitorScreenshot, setActiveCompetitorScreenshot] = useState<number | null>(null);
   const [designField, setDesignField] = useState<"interaction" | "brand" | "marketing">("interaction");
   const [researchMode, setResearchMode] = useState<"play" | "visual">("play");
+  const [visualResearchPath, setVisualResearchPath] = useState<"trend" | "existing">("trend");
+  const [configuredFeedbackPlatforms, setConfiguredFeedbackPlatforms] = useState<string[] | null>(null);
 
   useEffect(() => {
     if (activeCompetitorScreenshot === null) return;
@@ -135,6 +125,8 @@ export default function ResearchRunner({ onComplete, candidateSelectionCount = 0
       const draft = JSON.parse(window.localStorage.getItem("design-lab-project-draft") || "{}");
       setDesignField(normalizeDesignField(draft.designType));
       setResearchMode(draft.researchMode === "visual" ? "visual" : "play");
+      setVisualResearchPath(draft.visualResearchPath === "existing" ? "existing" : "trend");
+      if (Array.isArray(draft.feedbackPlatforms)) setConfiguredFeedbackPlatforms(draft.feedbackPlatforms.map(String));
     } catch { /* keep default */ }
     queueMicrotask(() => {
       setTaskId(id);
@@ -200,15 +192,15 @@ export default function ResearchRunner({ onComplete, candidateSelectionCount = 0
     setSelectedDirections(directionSignature.split("\u001f").slice(0, 4));
   }, [status, directionSignature]);
 
-  const referenceStage = Boolean(activity?.visualDirectionsConfirmed);
   const visualOnly = Boolean(activity?.visualOnly) || researchMode === "visual";
+  const referenceStage = visualOnly && (visualResearchPath === "existing" || Boolean(activity?.visualDirectionsConfirmed));
   const fieldResearchName = visualOnly ? "竞品视觉与趋势" : designField === "brand" ? "数字品牌案例与反馈" : designField === "marketing" ? "大促案例与反馈" : "玩法案例与用户反馈调研";
   const runningHeadline = referenceStage ? `${researchProfiles[designField].referenceSources.length}个视觉平台正在同步研究`
     : activity?.phase === "xhs_competitor_discovery" ? "正在识别主要竞品"
       : activity?.phase === "xhs_visual_searching" ? "竞品视觉案例研究中"
       : activity?.phase === "official_trend_reading" ? "视觉趋势交叉分析中"
         : designField === "interaction" && !visualOnly ? "玩法案例与用户反馈调研中" : `${fieldResearchName}中`;
-  const headline = status === "queued" ? (referenceStage ? "视觉参考收集正在排队" : `${fieldResearchName}研究正在排队`)
+  const headline = status === "queued" ? (referenceStage ? `${researchProfiles[designField].referenceSources.length}个视觉平台正在同步研究` : `${fieldResearchName}研究正在排队`)
     : status === "running" ? runningHeadline
       : status === "awaiting_competitor_confirmation" ? "已提取竞品关键词"
       : status === "awaiting_visual_confirmation" ? "确认4个视觉方向"
@@ -225,15 +217,15 @@ export default function ResearchRunner({ onComplete, candidateSelectionCount = 0
     if (!sources.length) return 0;
     return Math.min(99, Math.round(sources.reduce((sum, source) => sum + Number(source.progress || 0), 0) / sources.length));
   }, [status, activity]);
-  const sourceNames: Record<string, string> = { xiaohongshu: "小红书", weibo: "微博", voiceOfUser: "用户之声" };
+  const sourceNames: Record<string, string> = { xiaohongshu: "小红书", weibo: "微博", voiceOfUser: "用户之声", behance: "Behance", pinterest: "Pinterest" };
   const sourceLabel = sourceNames[blockedSource] || "研究平台";
-  const loginPlatforms = visualOnly ? ["小红书"] : activity?.loginRequiredPlatforms?.length ? activity.loginRequiredPlatforms : [sourceLabel];
+  const loginPlatforms = activity?.loginRequiredPlatforms?.length ? activity.loginRequiredPlatforms : [sourceLabel];
   const heartbeatAge = activity?.updatedAt ? clock - new Date(activity.updatedAt).getTime() : 0;
   const slow = status === "running" && heartbeatAge > 45000;
   const profileSources = researchProfiles[designField].researchSources.map((name, index) => ({ id: `profile-${index}`, name, detail: designField === "brand" ? "按数字载体保留完整来源证据" : "按会场与开屏边界保留完整来源证据" }));
   const referenceIds = ["behance", "pinterest"];
-  const visibleSources = activity?.visualDirectionsConfirmed ? referenceSourceCopy.filter((source) => referenceIds.includes(source.id)) : visualOnly ? sourceCopy.filter((source) => source.id !== "xiaohongshu" && source.id !== "weibo" && source.id !== "voiceOfUser") : designField === "interaction" ? sourceCopy.filter((source) => ["xiaohongshu", "weibo", "voiceOfUser"].includes(source.id) && (!activity?.selectedFeedbackPlatforms?.length || activity.selectedFeedbackPlatforms.includes(source.id))) : profileSources;
-  const referenceFlowIndex = referenceFlow.findIndex((step) => step.phase === activity?.phase);
+  const selectedFeedbackPlatforms = activity?.selectedFeedbackPlatforms ?? configuredFeedbackPlatforms;
+  const visibleSources = referenceStage ? referenceSourceCopy.filter((source) => referenceIds.includes(source.id)) : visualOnly ? sourceCopy.filter((source) => source.id !== "xiaohongshu" && source.id !== "weibo" && source.id !== "voiceOfUser") : designField === "interaction" ? sourceCopy.filter((source) => ["xiaohongshu", "weibo", "voiceOfUser"].includes(source.id) && (!selectedFeedbackPlatforms || selectedFeedbackPlatforms.includes(source.id))) : profileSources;
   const resumeResearch = async () => {
     if (!taskId) return;
     const response = await fetch(`/api/research/tasks/${taskId}`, {
@@ -358,7 +350,10 @@ export default function ResearchRunner({ onComplete, candidateSelectionCount = 0
         activity: { ...activity, visualDirections: chosenDirections, visualDirectionsConfirmed: true, phase: "visual_reference_pending", message: "案例与视觉方向已确认" },
       }),
     }).catch(() => null);
-    if (response?.ok) await onConfirmDirections?.();
+    if (response?.ok) {
+      onVisualDirectionsConfirmed?.(chosenDirections.map((direction) => direction.label));
+      await onConfirmDirections?.();
+    }
     setConfirming(false);
   };
 
@@ -369,24 +364,6 @@ export default function ResearchRunner({ onComplete, candidateSelectionCount = 0
         <strong>{progress}%</strong>
       </div>}
       {status !== "awaiting_visual_confirmation" && <div className="runner-progress"><i style={{ width: `${progress}%` }} /></div>}
-      {referenceStage && (
-        <section className="reference-collection-flow" aria-label="参考图采集流程">
-          <header>
-            <div><small>REFERENCE COLLECTION</small><h2>参考图采集流程</h2></div>
-            <span>平台访问或模型分析受限时，将保留已采集内容并标记降级原因。</span>
-          </header>
-          <ol>
-            {referenceFlow.map((step, index) => {
-              const active = status === "running" && (referenceFlowIndex === index || (referenceFlowIndex < 0 && index === 1));
-              const done = status === "completed" || (referenceFlowIndex > index);
-              return <li className={done ? "done" : active ? "active" : ""} key={step.phase}>
-                <i>{done ? "✓" : index+1}</i><strong>{step.label}</strong>
-              </li>;
-            })}
-          </ol>
-          {activity?.degraded && <p className="reference-degradation"><b>降级交付：</b>{activity.degradationReason || "部分平台未达到目标样本量，已保留可用参考图。"}</p>}
-        </section>
-      )}
       {status !== "awaiting_visual_confirmation" && <div className="runner-sources">
         {visibleSources.map((source) => {
           const sourceProgress = activity?.sourceProgress?.[source.id];
@@ -394,15 +371,8 @@ export default function ResearchRunner({ onComplete, candidateSelectionCount = 0
           const isPlatformCard = referenceStage || visualOnly || ["xiaohongshu", "weibo", "voiceOfUser"].includes(source.id);
           const viewed = sourceProgress?.reviewed ?? sourceProgress?.browsed ?? 0;
           const captured = status === "completed" ? sourceProgress?.saved || 0 : sourceProgress?.eligible ?? sourceProgress?.saved ?? 0;
-          const skipSummary = Object.entries(sourceProgress?.skipped || {})
-            .filter(([, count]) => Number(count) > 0)
-            .map(([reason, count]) => `${skipReasonLabels[reason] || reason} ${count} 条`)
-            .join("、");
-          const sourceDiagnostic = sourceProgress
-            ? `已找到 ${sourceProgress.browsed || 0} 条结果，尝试详情 ${sourceProgress.reviewed || 0} 条，成功打开 ${sourceProgress.opened || 0} 条，通过校验 ${sourceProgress.eligible || 0} 条，保存 ${sourceProgress.saved || 0} 条${skipSummary ? `。跳过原因：${skipSummary}` : ""}`
-            : undefined;
           return (
-            <article title={sourceDiagnostic} aria-label={sourceDiagnostic} className={`source-${source.id} ${isPlatformCard ? "platform-summary" : ""} ${sourceProgress?.phase && !["queued", "completed", "skipped"].includes(sourceProgress.phase) ? "active" : ""}`} key={source.name}>
+            <article className={`source-${source.id} ${isPlatformCard ? "platform-summary" : ""} ${sourceProgress?.phase && !["queued", "completed", "skipped"].includes(sourceProgress.phase) ? "active" : ""}`} key={source.name}>
               {isOfficialTrendCard
                 ? <div className="visual-source-minimal"><span className="official-trend-logos"><PlatformLogo platform="pinterest" /><PlatformLogo platform="adobe" /><PlatformLogo platform="canva" /></span><strong>趋势分析</strong></div>
                 : isPlatformCard
@@ -431,13 +401,13 @@ export default function ResearchRunner({ onComplete, candidateSelectionCount = 0
                   <a key={item.id} href={item.url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={item.mediaKeys?.length ? `/api/research/tasks/${taskId}/candidates/${item.id}/media/0` : `/api/research/tasks/${taskId}/candidates/${item.id}/screenshot`} alt={item.title} />
-                    <span className="visual-direction-example-caption"><span>{item.title}</span><b>↗ 来源</b></span>
+                    <span className="visual-direction-example-caption"><span>{item.title}</span><b><NightingaleIcon name="arrowUpRight" size={14} />来源</b></span>
                   </a>
                 ))}</div>
               </article>;
             })}
           </div>
-          <button className="primary" type="button" disabled={confirming || selectedDirections.length < 1 || (!visualOnly && !candidateSelectionCount)} onClick={() => void confirmVisualDirections()}>{confirming ? "正在进入下一步…" : visualOnly ? `确认 ${selectedDirections.length} 个视觉方向` : `确认 ${candidateSelectionCount} 个案例与 ${selectedDirections.length} 个视觉方向`}</button>
+          <button className="primary" type="button" disabled={confirming || selectedDirections.length < 1 || (!visualOnly && !candidateSelectionCount)} onClick={() => void confirmVisualDirections()}>{confirming ? "正在准备参考图…" : visualOnly ? "收集参考图" : `确认 ${candidateSelectionCount} 个案例与 ${selectedDirections.length} 个视觉方向`}</button>
         </section>
       )}
       {status === "awaiting_competitor_confirmation" && (
@@ -481,7 +451,7 @@ export default function ResearchRunner({ onComplete, candidateSelectionCount = 0
         <div className="runner-action-panel login">
           <div className="runner-action-copy">
             <i aria-hidden="true">!</i>
-            <div><strong>请先登录{loginPlatforms.join("、")}</strong><span>{visualOnly ? "登录后点击“已登录”继续视觉研究。" : "三个平台的页签都会保留，研究已暂停。完成登录后点“已登录”；无法登录的平台可点“忽略该平台”后继续。"}</span></div>
+            <div><strong>请先登录{loginPlatforms.join("、")}</strong><span>{visualOnly ? "登录后点击“已登录”继续视觉研究。" : "完成登录后点“已登录”；无法登录的平台可点“忽略该平台”后继续。"}</span></div>
           </div>
           <div className="runner-action-actions">
             {!visualOnly && <button type="button" onClick={() => void ignoreBlockedPlatform()}>忽略该平台</button>}
